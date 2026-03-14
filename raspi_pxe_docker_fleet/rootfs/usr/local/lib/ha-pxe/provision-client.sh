@@ -8,22 +8,35 @@ rewrite_cmdline() {
   local boot_dir="${1}"
   local server_ip="${2}"
   local root_export="${3}"
-  local existing cleaned
+  local existing token
+  local cleaned_prefix=""
+  local -a cleaned_tokens=()
 
-  existing="$(tr -s ' ' ' ' < "${boot_dir}/cmdline.txt")"
-  cleaned="${existing}"
-  cleaned="$(sed -E \
-    -e 's/(^| )root=[^ ]+( |$)/ /g' \
-    -e 's/(^| )rootfstype=[^ ]+( |$)/ /g' \
-    -e 's/(^| )rootwait( |$)/ /g' \
-    -e 's/(^| )nfsroot=[^ ]+( |$)/ /g' \
-    -e 's/(^| )ip=[^ ]+( |$)/ /g' \
-    -e 's/(^| )init=[^ ]+( |$)/ /g' <<<"${cleaned}")"
-  cleaned="$(xargs <<<"${cleaned}")"
+  existing="$(tr '\n' ' ' < "${boot_dir}/cmdline.txt" | tr -s '[:space:]' ' ')"
+
+  for token in ${existing}; do
+    case "${token}" in
+      root=*|rootfstype=*|rootwait|nfsroot=*|ip=*|init=*|rw|ro|resize|systemd.run=*|systemd.run_success_action=*|systemd.unit=*)
+        continue
+        ;;
+    esac
+
+    if [[ " ${cleaned_tokens[*]} " == *" ${token} "* ]]; then
+      continue
+    fi
+
+    cleaned_tokens+=("${token}")
+  done
+
+  ha_pxe::log_debug "Original cmdline for ${boot_dir}: ${existing}"
+  if ((${#cleaned_tokens[@]} > 0)); then
+    cleaned_prefix="${cleaned_tokens[*]} "
+  fi
 
   cat > "${boot_dir}/cmdline.txt" <<EOF
-${cleaned} root=/dev/nfs nfsroot=${server_ip}:${root_export},vers=3,tcp,nolock rw ip=dhcp rootwait
+${cleaned_prefix}root=/dev/nfs nfsroot=${server_ip}:${root_export},vers=3,tcp,nolock rw ip=dhcp rootwait
 EOF
+  ha_pxe::log_debug "Rewritten cmdline for ${boot_dir}: $(cat "${boot_dir}/cmdline.txt")"
 }
 
 rewrite_fstab() {

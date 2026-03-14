@@ -11,6 +11,7 @@ HA_PXE_TFTP_DIR="${HA_PXE_ROOT}/tftp"
 HA_PXE_TMP_DIR="${HA_PXE_ROOT}/tmp"
 HA_PXE_EXPORTS_FILE="${HA_PXE_RUNTIME_DIR}/exports"
 HA_PXE_DHCP_HINTS_FILE="${HA_PXE_RUNTIME_DIR}/dhcp-example.txt"
+HA_PXE_SYSLOG_FILE="/var/log/messages"
 HA_PXE_OS_PAGE="https://www.raspberrypi.com/software/operating-systems/"
 HA_PXE_BG_PIDS=()
 HA_PXE_LOG_LEVEL="info"
@@ -250,6 +251,31 @@ ha_pxe::download_with_progress() {
   else
     ha_pxe::log_info "Downloaded ${label}: ${current_mib} MiB"
   fi
+}
+
+ha_pxe::start_tftp_log_bridge() {
+  [[ "${HA_PXE_LOG_LEVEL}" == "debug" ]] || return 0
+
+  if pgrep -x syslogd >/dev/null 2>&1; then
+    if [[ -f "${HA_PXE_SYSLOG_FILE}" ]]; then
+      ha_pxe::log_info "Tailing ${HA_PXE_SYSLOG_FILE} for TFTP request logs"
+      sh -c 'tail -n 0 -F "$1" | awk '"'"'/in\.tftpd|tftpd/'"'"'' sh "${HA_PXE_SYSLOG_FILE}" &
+      HA_PXE_BG_PIDS+=("$!")
+    else
+      ha_pxe::log_warning "syslogd is already running but ${HA_PXE_SYSLOG_FILE} is unavailable; TFTP request logs may not appear"
+    fi
+    return 0
+  fi
+
+  if command -v syslogd >/dev/null 2>&1; then
+    ha_pxe::log_info "Starting local syslog bridge for TFTP request logs"
+    syslogd -n -O /proc/self/fd/1 -S &
+    HA_PXE_BG_PIDS+=("$!")
+    sleep 1
+    return 0
+  fi
+
+  ha_pxe::log_warning "syslogd is unavailable; TFTP request logs may not appear"
 }
 
 ha_pxe::reset_runtime_state() {
@@ -608,7 +634,8 @@ ha_pxe::start_tftp_server() {
 
   case "${HA_PXE_LOG_LEVEL}" in
     debug)
-      tftp_args+=( -vv )
+      tftp_args+=( --verbosity 5 )
+      ha_pxe::start_tftp_log_bridge
       ha_pxe::log_info "TFTP request logging is enabled"
       ;;
     *)
