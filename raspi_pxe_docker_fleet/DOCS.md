@@ -1,107 +1,127 @@
 # Raspberry Pi PXE Docker Fleet
 
-This add-on provisions Raspberry Pi OS Lite network boot clients from Home
-Assistant.
+This add-on prepares Raspberry Pi network-boot clients from Home Assistant.
+Each configured client gets:
 
-For each configured Raspberry Pi client, it will:
+- a TFTP boot tree
+- a dedicated NFS root filesystem
+- a first-boot user setup
+- Docker installed on first boot
+- a simple list of Docker images to run
 
-- Select the correct Raspberry Pi OS Lite image family.
-- Download the latest Lite image from raspberrypi.com.
-- Extract the boot and root partitions.
-- Publish the boot files over TFTP.
-- Export separate per-client boot and root directories over NFS.
-- Inject a first-boot service that creates a user, enables SSH, installs
-  Docker, and starts a recurring container reconciliation service.
+## Before you start
 
-## Add-on configuration
+- Disable Home Assistant Protection mode before starting the add-on.
+- Make sure your Raspberry Pi model and bootloader support network boot.
+- Provide DHCP or ProxyDHCP separately. This add-on does not serve DHCP.
+
+## Example configuration
 
 ```yaml
 log_level: info
-server_ip: 192.168.1.10
+server_ip: 192.168.25.250
 default_username: pi
-default_password: changeme
+default_password: ""
 ssh_authorized_keys: |
-  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN lee@example-macbook
+  ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDJ1i4WqQzK8V7o0xJ3mQeP1Xr1d9Yxk5oG4nM7lR0pA2uN6sB8wQ3nK6vM9cT1yP4wF7aL2mD8hQ9nS3gB5fL1zK0pR6tN8vQ2xC4mH7jL9sP1dF3gH5jK7mN9pQ2rT4vW6xY8zA0bC2dE4fG6hJ8kL0mN2pQ4rS6tU8vW0xY2z user@example
 clients:
-  - serial: "0x12345678abcdef12"
-    model: pi4
-    hostname: kitchen-pi
-    image_arch: auto
+  - serial: "cdc843d7"
+    model: pi3
+    hostname: janky
+    image_arch: arm64
     rebuild: false
     containers: |
       ghcr.io/home-assistant/home-assistant:stable
       ghcr.io/linuxserver/watchtower:latest
-  - serial: "abcdef12"
-    model: pi2
-    hostname: garage-pi
+  - serial: "0x4f2c1a7b"
+    model: pi4
+    hostname: kitchen-pi.home.example
     image_arch: auto
     rebuild: false
     containers: |
+      docker.io/library/nginx:1.27-alpine
       ghcr.io/example/sensor-agent:latest
 ```
 
-## Option reference
+## Field reference
 
-- `log_level`: `error`, `warn`, `info`, or `debug`. `debug` enables verbose
-  provisioning logs and TFTP request logging.
-- `server_ip`: Optional override for the Home Assistant host IP that the Pi
-  clients should use for TFTP and NFS. Leave blank to auto-detect.
-- `default_username`: The Linux account created on each Pi at first boot.
-- `default_password`: Optional password for that user. Supply either a password
-  or SSH keys.
-- `ssh_authorized_keys`: Optional newline-separated SSH public keys for the
-  created user.
+- `log_level`: `error`, `warn`, `info`, or `debug`.
+  `debug` adds verbose provisioning logs and TFTP request logs.
+- `server_ip`: Optional override for the IP address clients should use for TFTP
+  and NFS. Leave it blank to auto-detect.
+- `default_username`: User created on each Raspberry Pi at first boot.
+- `default_password`: Optional password for that user.
+- `ssh_authorized_keys`: Optional newline-separated OpenSSH public keys.
+  Each key must be the full line, including key type, base64 payload, and
+  optional comment.
 - `clients`: List of Raspberry Pi clients to provision.
 
 Client fields:
 
-- `serial`: Raspberry Pi serial number used for the network boot directory.
-- `model`: Model family used to select the image architecture.
-- `hostname`: Hostname written into the client rootfs. Short names and dotted
-  FQDN-style hostnames are accepted.
-- `image_arch`: `auto`, `armhf`, or `arm64`. `auto` maps Pi 0/1/2 to `armhf`
-  and newer families to `arm64`.
-- `rebuild`: If `true`, the exported boot/root trees for that client are
-  recreated from the latest image on the next add-on start.
-- `containers`: Newline-separated Docker image references to pull and run on
-  the client.
+- `serial`: Raspberry Pi serial number. Hex strings with or without a `0x`
+  prefix are accepted.
+- `model`: One of `pi0`, `pi1`, `pi2`, `pi3`, `pi4`, `pi5`, `400`, `500`,
+  `cm3`, `cm4`, `cm5`, or `zero2w`.
+- `hostname`: Hostname written into the client root filesystem. Short hostnames
+  and dotted names are accepted.
+- `image_arch`: `auto`, `armhf`, or `arm64`. `auto` maps older boards to
+  `armhf` and newer boards to `arm64`.
+- `rebuild`: If `true`, the client boot and root exports are recreated from a
+  fresh Raspberry Pi OS Lite image on the next start.
+- `containers`: Newline-separated Docker image references. Each line should be
+  a normal image string such as `ghcr.io/home-assistant/home-assistant:stable`
+  or `docker.io/library/nginx:1.27-alpine`.
+
+## Common examples
+
+Example `ssh_authorized_keys` value:
+
+```yaml
+ssh_authorized_keys: |
+  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN lee@example-macbook
+```
+
+Example `containers` value:
+
+```yaml
+containers: |
+  ghcr.io/home-assistant/home-assistant:stable
+  ghcr.io/linuxserver/watchtower:latest
+  docker.io/library/busybox:1.36
+```
+
+Example minimal single-client configuration:
+
+```yaml
+log_level: info
+server_ip: ""
+default_username: pi
+default_password: ""
+ssh_authorized_keys: |
+  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN lee@example-macbook
+clients:
+  - serial: "cdc843d7"
+    model: pi3
+    hostname: janky
+    image_arch: arm64
+```
 
 ## DHCP requirement
 
-This add-on does not run DHCP or ProxyDHCP. Your network still needs to tell
-the Raspberry Pi bootloader to use the Home Assistant host as its TFTP server.
-
-At minimum your DHCP environment must point Raspberry Pi PXE clients at:
+Your network must tell Raspberry Pi boot clients to use the Home Assistant host
+for TFTP. At minimum you usually need:
 
 - next-server / option 66: the add-on `server_ip`
-- boot file / option 67: `bootcode.bin` for older boards, or the relevant
-  Raspberry Pi firmware entrypoint for your platform
+- boot file / option 67: the Raspberry Pi firmware entrypoint for your board
 
-If your router cannot do this, place a small ProxyDHCP service on the network
-or add the equivalent settings to a dnsmasq/ISC DHCP service outside this
-add-on.
-
-## Protection mode
-
-Disable Home Assistant Protection mode for this add-on before starting it.
-
-This add-on loop-mounts Raspberry Pi OS images during provisioning and mounts
-the kernel NFS filesystems needed by the in-container NFS service. If
-Protection mode is left enabled, startup will fail with mount permission
-errors.
+If your main router cannot do this, use a separate DHCP or ProxyDHCP service on
+the network.
 
 ## Operational notes
 
-- `rebuild: true` is destructive for that client export. It refreshes the boot
-  and root trees from the latest Raspberry Pi OS Lite image.
-- Docker workloads are deliberately simple in this first version. The client
-  runtime only manages image references and starts them with Docker defaults.
-- The add-on currently uses Alpine `nfs-utils` for the NFS service while
-  staying on the standard Home Assistant add-on base image. If you need
-  NFS-Ganesha specifically, that likely means introducing a different package
-  source or moving to a custom image.
-- The add-on exports both the boot tree and the root tree over NFS. The client
-  boots with a kernel `root=/dev/nfs` argument and mounts the boot tree at
-  `/boot/firmware` after the rootfs is up.
-- Because the exported root is persistent under `/data`, client changes survive
+- `rebuild: true` replaces the exported boot and root trees for that client.
+- Client container management is intentionally simple. Each configured image is
+  pulled and started with Docker defaults.
+- The client root filesystem is stored under `/data`, so client state survives
   add-on restarts.

@@ -1,60 +1,29 @@
 # Home Assistant Raspberry Pi PXE Fleet
 
-This repository is structured as a Home Assistant add-on repository.
+This repository contains the Home Assistant add-on `raspi_pxe_docker_fleet`.
 
-It contains one add-on, `raspi_pxe_docker_fleet`, that provisions Raspberry Pi
-OS Lite images for PXE-style network boot, exports a per-client NFS root, and
-pushes a simple Docker image list down to each booted client.
+The add-on prepares Raspberry Pi network-boot clients by:
 
-The add-on uses the standard Home Assistant add-on base image and installs the
-required services with `apk` inside the add-on container.
-
-## Repository layout
-
-- `repository.yaml`: Home Assistant add-on repository metadata.
-- `raspi_pxe_docker_fleet/`: the add-on itself.
-
-## What the add-on does
-
-- Downloads the latest Raspberry Pi OS Lite image for each client architecture.
-- Creates a per-client boot tree and NFS root export.
-- Serves the boot files over TFTP.
-- Serves the root filesystem over NFS.
-- Injects a first-boot bootstrap service into the exported rootfs.
-- Creates a named user on the client at first boot.
-- Installs Docker on the client and reconciles a configured list of container
-  images.
-- Accepts either short hostnames or dotted FQDN-style hostnames per client.
-- Supports configurable add-on log levels, with verbose TFTP request logging at
-  `debug`.
-- Uses `dnsmasq` for TFTP service so TFTP request logs can flow directly into
-  the Home Assistant add-on logs.
-
-## Important constraints
-
-- DHCP or ProxyDHCP is not bundled here. Your network must already advertise the
-  add-on host as the Raspberry Pi TFTP/PXE server, or you must add that in your
-  router or DHCP server.
-- The add-on manages simple image-only workloads. Each configured image is run
-  as `docker run -d --restart unless-stopped IMAGE`. Per-container port, volume,
-  and environment configuration is not modeled yet.
-- The current add-on implementation uses Alpine `nfs-utils` on the stock Home
-  Assistant base image for NFS exports. If you specifically need
-  NFS-Ganesha, that likely requires a different package source or a custom
-  image.
-- Raspberry Pi network boot support varies by board and bootloader EEPROM state.
-  The add-on accepts multiple model families for image selection, but your board
-  still needs to support and be configured for network boot.
+- serving boot files over TFTP
+- serving a per-client root filesystem over NFS
+- creating a user on first boot
+- installing Docker on the client
+- starting a configured list of Docker images on that client
 
 ## Install
 
 1. Add this repository to Home Assistant as an add-on repository.
 2. Install `Raspberry Pi PXE Docker Fleet`.
-3. Disable Protection mode for the add-on before starting it. The add-on needs
-   mount privileges to unpack Raspberry Pi OS images and to run the NFS server.
-4. Configure at least one client entry, a username, and either a password or
-   SSH authorized keys.
-5. Point your DHCP infrastructure at the Home Assistant host for TFTP boot.
+3. Disable Protection mode before starting the add-on.
+4. Configure at least one Raspberry Pi client plus a login method.
+5. Point your DHCP or ProxyDHCP service at the Home Assistant host for TFTP.
 
-See [`raspi_pxe_docker_fleet/DOCS.md`](./raspi_pxe_docker_fleet/DOCS.md) for
-the full add-on configuration and operational notes.
+## Notes
+
+- DHCP or ProxyDHCP is not included in this add-on.
+- Raspberry Pi network boot still depends on the board model and bootloader
+  state.
+- Container management is intentionally simple: each configured image is pulled
+  and started with Docker defaults.
+
+See [`raspi_pxe_docker_fleet/DOCS.md`](./raspi_pxe_docker_fleet/DOCS.md) for configuration examples and operational details.
