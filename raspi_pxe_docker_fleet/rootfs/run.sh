@@ -9,6 +9,7 @@ cleanup() {
 
 main() {
   ha_pxe::ensure_directories
+  ha_pxe::init_logging
   ha_pxe::reset_runtime_state
   ha_pxe::validate_config
   ha_pxe::require_mount_support

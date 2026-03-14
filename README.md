@@ -25,6 +25,8 @@ required services with `apk` inside the add-on container.
 - Installs Docker on the client and reconciles a configured list of container
   images.
 - Accepts either short hostnames or dotted FQDN-style hostnames per client.
+- Supports configurable add-on log levels, with verbose TFTP request logging at
+  `debug`.
 
 ## Important constraints
 

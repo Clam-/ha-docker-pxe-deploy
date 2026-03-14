@@ -16,6 +16,7 @@ For each configured Raspberry Pi client, it will:
 ## Add-on configuration
 
 ```yaml
+log_level: info
 server_ip: 192.168.1.10
 default_username: pi
 default_password: changeme
@@ -41,6 +42,8 @@ clients:
 
 ## Option reference
 
+- `log_level`: `error`, `warn`, `info`, or `debug`. `debug` enables verbose
+  provisioning logs and TFTP request logging.
 - `server_ip`: Optional override for the Home Assistant host IP that the Pi
   clients should use for TFTP and NFS. Leave blank to auto-detect.
 - `default_username`: The Linux account created on each Pi at first boot.

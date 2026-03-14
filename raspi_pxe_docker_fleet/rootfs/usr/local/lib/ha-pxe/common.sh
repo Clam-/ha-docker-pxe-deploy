@@ -13,29 +13,108 @@ HA_PXE_EXPORTS_FILE="${HA_PXE_RUNTIME_DIR}/exports"
 HA_PXE_DHCP_HINTS_FILE="${HA_PXE_RUNTIME_DIR}/dhcp-example.txt"
 HA_PXE_OS_PAGE="https://www.raspberrypi.com/software/operating-systems/"
 HA_PXE_BG_PIDS=()
+HA_PXE_LOG_LEVEL="info"
+
+ha_pxe::log_level_rank() {
+  case "${1}" in
+    error)
+      printf '0\n'
+      ;;
+    warn)
+      printf '1\n'
+      ;;
+    info)
+      printf '2\n'
+      ;;
+    debug)
+      printf '3\n'
+      ;;
+    *)
+      printf '2\n'
+      ;;
+  esac
+}
+
+ha_pxe::should_log() {
+  local requested_rank configured_rank
+
+  requested_rank="$(ha_pxe::log_level_rank "${1}")"
+  configured_rank="$(ha_pxe::log_level_rank "${HA_PXE_LOG_LEVEL}")"
+  (( requested_rank <= configured_rank ))
+}
+
+ha_pxe::emit_log() {
+  local level="${1}"
+  shift
+
+  ha_pxe::should_log "${level}" || return 0
+
+  case "${level}" in
+    error)
+      if declare -F bashio::log.error >/dev/null 2>&1; then
+        bashio::log.error "$*"
+      else
+        echo "[ERROR] $*" >&2
+      fi
+      ;;
+    warn)
+      if declare -F bashio::log.warning >/dev/null 2>&1; then
+        bashio::log.warning "$*"
+      else
+        echo "[WARN] $*" >&2
+      fi
+      ;;
+    debug)
+      if declare -F bashio::log.info >/dev/null 2>&1; then
+        bashio::log.info "[debug] $*"
+      else
+        echo "[DEBUG] $*" >&2
+      fi
+      ;;
+    *)
+      if declare -F bashio::log.info >/dev/null 2>&1; then
+        bashio::log.info "$*"
+      else
+        echo "[INFO] $*" >&2
+      fi
+      ;;
+  esac
+}
+
+ha_pxe::init_logging() {
+  local configured_level
+
+  configured_level="$(ha_pxe::config_string '.log_level')"
+  case "${configured_level}" in
+    error|warn|info|debug)
+      HA_PXE_LOG_LEVEL="${configured_level}"
+      ;;
+    "")
+      HA_PXE_LOG_LEVEL="info"
+      ;;
+    *)
+      HA_PXE_LOG_LEVEL="info"
+      ha_pxe::emit_log warn "Unsupported log_level '${configured_level}', defaulting to info"
+      ;;
+  esac
+
+  ha_pxe::emit_log info "Configured log level: ${HA_PXE_LOG_LEVEL}"
+}
 
 ha_pxe::log_info() {
-  if declare -F bashio::log.info >/dev/null 2>&1; then
-    bashio::log.info "$*"
-  else
-    echo "[INFO] $*" >&2
-  fi
+  ha_pxe::emit_log info "$@"
 }
 
 ha_pxe::log_warning() {
-  if declare -F bashio::log.warning >/dev/null 2>&1; then
-    bashio::log.warning "$*"
-  else
-    echo "[WARN] $*" >&2
-  fi
+  ha_pxe::emit_log warn "$@"
 }
 
 ha_pxe::log_error() {
-  if declare -F bashio::log.error >/dev/null 2>&1; then
-    bashio::log.error "$*"
-  else
-    echo "[ERROR] $*" >&2
-  fi
+  ha_pxe::emit_log error "$@"
+}
+
+ha_pxe::log_debug() {
+  ha_pxe::emit_log debug "$@"
 }
 
 ha_pxe::ensure_directories() {
@@ -402,7 +481,7 @@ ha_pxe::populate_from_image() {
   mount_root="$(mktemp -d "${HA_PXE_TMP_DIR}/root.XXXXXX")"
   trap cleanup_mounts RETURN
 
-  ha_pxe::log_info "Preparing loop device for ${image_path##*/}"
+  ha_pxe::log_debug "Preparing loop device for ${image_path##*/}"
   ha_pxe::cleanup_loop_devices_for_image "${image_path}"
 
   if ! loop_device="$(losetup --find --show --read-only --partscan "${image_path}")"; then
@@ -413,35 +492,35 @@ ha_pxe::populate_from_image() {
   boot_partition="${loop_device}p1"
   root_partition="${loop_device}p2"
 
-  ha_pxe::log_info "Attached ${image_path##*/} to ${loop_device}"
-  ha_pxe::log_info "Waiting for partition devices ${boot_partition} and ${root_partition}"
+  ha_pxe::log_debug "Attached ${image_path##*/} to ${loop_device}"
+  ha_pxe::log_debug "Waiting for partition devices ${boot_partition} and ${root_partition}"
   if ! ha_pxe::wait_for_block_device "${boot_partition}" || ! ha_pxe::wait_for_block_device "${root_partition}"; then
     ha_pxe::log_error "Partition devices for ${loop_device} did not appear"
     return 1
   fi
 
-  ha_pxe::log_info "Mounting boot partition ${boot_partition} to ${mount_boot}"
+  ha_pxe::log_debug "Mounting boot partition ${boot_partition} to ${mount_boot}"
   if ! mount -o ro -t vfat "${boot_partition}" "${mount_boot}"; then
     ha_pxe::log_error "Failed to mount boot partition ${boot_partition} from ${image_path}"
     return 1
   fi
   mounted_boot=true
 
-  ha_pxe::log_info "Mounting root partition ${root_partition} to ${mount_root}"
+  ha_pxe::log_debug "Mounting root partition ${root_partition} to ${mount_root}"
   if ! mount -o ro -t ext4 "${root_partition}" "${mount_root}"; then
     ha_pxe::log_error "Failed to mount root partition ${root_partition} from ${image_path}"
     return 1
   fi
   mounted_root=true
 
-  ha_pxe::log_info "Clearing target boot export ${boot_dir}"
+  ha_pxe::log_debug "Clearing target boot export ${boot_dir}"
   ha_pxe::clear_directory "${boot_dir}"
-  ha_pxe::log_info "Clearing target root export ${root_dir}"
+  ha_pxe::log_debug "Clearing target root export ${root_dir}"
   ha_pxe::clear_directory "${root_dir}"
 
-  ha_pxe::log_info "Syncing boot files into ${boot_dir}"
+  ha_pxe::log_debug "Syncing boot files into ${boot_dir}"
   rsync -a --delete "${mount_boot}/" "${boot_dir}/"
-  ha_pxe::log_info "Syncing root filesystem into ${root_dir}"
+  ha_pxe::log_debug "Syncing root filesystem into ${root_dir}"
   rsync -aHAX --numeric-ids --delete "${mount_root}/" "${root_dir}/"
 
   sync
@@ -520,7 +599,24 @@ ha_pxe::start_nfs_server() {
 }
 
 ha_pxe::start_tftp_server() {
-  in.tftpd --foreground --listen --address 0.0.0.0:69 --secure "${HA_PXE_TFTP_DIR}" &
+  local tftp_args=(
+    --foreground
+    --listen
+    --address 0.0.0.0:69
+    --secure
+  )
+
+  case "${HA_PXE_LOG_LEVEL}" in
+    debug)
+      tftp_args+=( -vv )
+      ha_pxe::log_info "TFTP request logging is enabled"
+      ;;
+    *)
+      ;;
+  esac
+
+  ha_pxe::log_debug "Starting TFTP server with root ${HA_PXE_TFTP_DIR}"
+  in.tftpd "${tftp_args[@]}" "${HA_PXE_TFTP_DIR}" &
   HA_PXE_BG_PIDS+=("$!")
   ha_pxe::log_info "TFTP server is active on UDP 69"
 }
