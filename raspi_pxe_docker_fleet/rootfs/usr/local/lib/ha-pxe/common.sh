@@ -14,6 +14,7 @@ HA_PXE_DHCP_HINTS_FILE="${HA_PXE_RUNTIME_DIR}/dhcp-example.txt"
 HA_PXE_SYSLOG_FILE="/var/log/messages"
 HA_PXE_OS_PAGE="https://www.raspberrypi.com/software/operating-systems/"
 HA_PXE_BG_PIDS=()
+HA_PXE_AUX_PIDS=()
 HA_PXE_LOG_LEVEL="info"
 
 ha_pxe::log_level_rank() {
@@ -254,13 +255,22 @@ ha_pxe::download_with_progress() {
 }
 
 ha_pxe::start_tftp_log_bridge() {
+  local aux_pid
+
   [[ "${HA_PXE_LOG_LEVEL}" == "debug" ]] || return 0
 
   if pgrep -x syslogd >/dev/null 2>&1; then
     if [[ -f "${HA_PXE_SYSLOG_FILE}" ]]; then
       ha_pxe::log_info "Tailing ${HA_PXE_SYSLOG_FILE} for TFTP request logs"
       sh -c 'tail -n 0 -F "$1" | awk '"'"'/in\.tftpd|tftpd/'"'"'' sh "${HA_PXE_SYSLOG_FILE}" &
-      HA_PXE_BG_PIDS+=("$!")
+      aux_pid="$!"
+      sleep 1
+      if kill -0 "${aux_pid}" 2>/dev/null; then
+        HA_PXE_AUX_PIDS+=("${aux_pid}")
+      else
+        wait "${aux_pid}" || true
+        ha_pxe::log_warning "TFTP log tailer exited immediately; request logs may not appear"
+      fi
     else
       ha_pxe::log_warning "syslogd is already running but ${HA_PXE_SYSLOG_FILE} is unavailable; TFTP request logs may not appear"
     fi
@@ -268,10 +278,19 @@ ha_pxe::start_tftp_log_bridge() {
   fi
 
   if command -v syslogd >/dev/null 2>&1; then
+    if [[ -e /dev/log || -L /dev/log || -S /dev/log ]]; then
+      rm -f /dev/log || true
+    fi
     ha_pxe::log_info "Starting local syslog bridge for TFTP request logs"
-    syslogd -n -O /proc/self/fd/1 -S &
-    HA_PXE_BG_PIDS+=("$!")
+    syslogd -n -O - &
+    aux_pid="$!"
     sleep 1
+    if kill -0 "${aux_pid}" 2>/dev/null; then
+      HA_PXE_AUX_PIDS+=("${aux_pid}")
+    else
+      wait "${aux_pid}" || true
+      ha_pxe::log_warning "Local syslog bridge failed to start; TFTP request logs may not appear"
+    fi
     return 0
   fi
 
@@ -652,6 +671,10 @@ ha_pxe::shutdown() {
   local pid mount_point
 
   for pid in "${HA_PXE_BG_PIDS[@]:-}"; do
+    kill "${pid}" 2>/dev/null || true
+  done
+
+  for pid in "${HA_PXE_AUX_PIDS[@]:-}"; do
     kill "${pid}" 2>/dev/null || true
   done
 
