@@ -1,0 +1,31 @@
+ARG BUILD_FROM
+FROM $BUILD_FROM
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apk add --no-cache \
+    coreutils \
+    curl \
+    dosfstools \
+    e2fsprogs \
+    findutils \
+    iproute2 \
+    jq \
+    openssl \
+    parted \
+    rsync \
+    shadow \
+    tftp-hpa \
+    util-linux \
+    xz \
+    nfs-utils
+
+COPY rootfs /
+
+RUN chmod a+x \
+    /run.sh \
+    /usr/local/lib/ha-pxe/provision-client.sh \
+    /usr/local/lib/ha-pxe/templates/ha-pxe-firstboot.sh \
+    /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.sh
+
+CMD ["/run.sh"]

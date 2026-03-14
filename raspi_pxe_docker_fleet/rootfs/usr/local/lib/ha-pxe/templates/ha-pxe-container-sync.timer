@@ -1,0 +1,12 @@
+[Unit]
+Description=Recurring reconciliation for Home Assistant managed Docker containers
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=15m
+AccuracySec=1m
+Persistent=true
+Unit=ha-pxe-container-sync.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+configuration:
+  server_ip:
+    name: Server IP
+    description: Optional override for the Home Assistant host IP used in TFTP and NFS paths.
+  default_username:
+    name: Default username
+    description: Linux username to create on each Raspberry Pi during first boot.
+  default_password:
+    name: Default password
+    description: Optional password for the created user. Supply this or SSH authorized keys.
+  ssh_authorized_keys:
+    name: SSH authorized keys
+    description: Optional newline-separated public keys for the created user.
+  clients:
+    name: Raspberry Pi clients
+    description: Serial, model, hostname, optional image override, and newline-separated Docker image list per client.
