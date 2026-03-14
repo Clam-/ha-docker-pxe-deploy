@@ -46,9 +46,11 @@ required services with `apk` inside the add-on container.
 
 1. Add this repository to Home Assistant as an add-on repository.
 2. Install `Raspberry Pi PXE Docker Fleet`.
-3. Configure at least one client entry, a username, and either a password or
+3. Disable Protection mode for the add-on before starting it. The add-on needs
+   mount privileges to unpack Raspberry Pi OS images and to run the NFS server.
+4. Configure at least one client entry, a username, and either a password or
    SSH authorized keys.
-4. Point your DHCP infrastructure at the Home Assistant host for TFTP boot.
+5. Point your DHCP infrastructure at the Home Assistant host for TFTP boot.
 
 See [`raspi_pxe_docker_fleet/DOCS.md`](./raspi_pxe_docker_fleet/DOCS.md) for
 the full add-on configuration and operational notes.

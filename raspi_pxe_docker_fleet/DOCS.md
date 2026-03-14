@@ -78,6 +78,15 @@ If your router cannot do this, place a small ProxyDHCP service on the network
 or add the equivalent settings to a dnsmasq/ISC DHCP service outside this
 add-on.
 
+## Protection mode
+
+Disable Home Assistant Protection mode for this add-on before starting it.
+
+This add-on loop-mounts Raspberry Pi OS images during provisioning and mounts
+the kernel NFS filesystems needed by the in-container NFS service. If
+Protection mode is left enabled, startup will fail with mount permission
+errors.
+
 ## Operational notes
 
 - `rebuild: true` is destructive for that client export. It refreshes the boot

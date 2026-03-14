@@ -62,6 +62,117 @@ ha_pxe::config_json() {
   jq -c "${filter} // ${default_json}" "${HA_PXE_OPTIONS_FILE}"
 }
 
+ha_pxe::format_mib() {
+  local bytes="${1:-0}"
+  printf '%d' "$(((bytes + 1048575) / 1048576))"
+}
+
+ha_pxe::remote_content_length() {
+  local url="${1}"
+
+  curl -fsSLI "${url}" | awk '
+    {
+      key = tolower($1)
+      if (key == "content-length:") {
+        gsub(/\r/, "", $2)
+        length = $2
+      }
+    }
+    END {
+      if (length ~ /^[0-9]+$/) {
+        print length
+      }
+    }
+  '
+}
+
+ha_pxe::require_mount_support() {
+  local probe_dir probe_err err_text
+
+  probe_dir="$(mktemp -d "${HA_PXE_TMP_DIR}/mount-check.XXXXXX")"
+  probe_err="$(mktemp "${HA_PXE_TMP_DIR}/mount-check.XXXXXX.err")"
+
+  if mount -t tmpfs -o size=1m tmpfs "${probe_dir}" 2>"${probe_err}"; then
+    umount "${probe_dir}" || true
+    rm -f "${probe_err}"
+    rmdir "${probe_dir}" || true
+    return 0
+  fi
+
+  err_text=""
+  if [[ -s "${probe_err}" ]]; then
+    err_text="$(tr '\n' ' ' < "${probe_err}" | sed -E 's/[[:space:]]+/ /g; s/[[:space:]]+$//')"
+  fi
+
+  rm -f "${probe_err}"
+  rmdir "${probe_dir}" 2>/dev/null || true
+
+  ha_pxe::log_error "Mount operations are blocked inside the add-on${err_text:+ (${err_text})}."
+  ha_pxe::log_error "Disable Home Assistant Protection mode for this add-on and restart it. Mount privileges are required to unpack Raspberry Pi images and run NFS."
+  return 1
+}
+
+ha_pxe::download_with_progress() {
+  local url="${1}"
+  local destination_path="${2}"
+  local label="${3:-${destination_path##*/}}"
+  local content_length current_bytes current_mib total_mib percent
+  local last_percent=-5 last_bytes=0
+  local curl_err curl_pid
+
+  content_length="$(ha_pxe::remote_content_length "${url}" || true)"
+  curl_err="$(mktemp "${HA_PXE_TMP_DIR}/curl.XXXXXX.err")"
+
+  ha_pxe::log_info "Downloading ${label}"
+  curl -fL --silent --show-error "${url}" -o "${destination_path}" 2>"${curl_err}" &
+  curl_pid="$!"
+
+  while kill -0 "${curl_pid}" 2>/dev/null; do
+    sleep 5
+    [[ -f "${destination_path}" ]] || continue
+
+    current_bytes="$(wc -c < "${destination_path}")"
+    current_bytes="${current_bytes//[[:space:]]/}"
+    current_mib="$(ha_pxe::format_mib "${current_bytes}")"
+
+    if [[ "${content_length}" =~ ^[0-9]+$ ]] && (( content_length > 0 )); then
+      percent=$(( current_bytes * 100 / content_length ))
+      if (( percent >= last_percent + 5 && percent < 100 )); then
+        total_mib="$(ha_pxe::format_mib "${content_length}")"
+        ha_pxe::log_info "Downloading ${label}: ${percent}% (${current_mib} MiB/${total_mib} MiB)"
+        last_percent="${percent}"
+      fi
+    elif (( current_bytes >= last_bytes + 26214400 )); then
+      ha_pxe::log_info "Downloading ${label}: ${current_mib} MiB received"
+      last_bytes="${current_bytes}"
+    fi
+  done
+
+  if ! wait "${curl_pid}"; then
+    local err_text=""
+
+    if [[ -s "${curl_err}" ]]; then
+      err_text="$(tr '\n' ' ' < "${curl_err}" | sed -E 's/[[:space:]]+/ /g; s/[[:space:]]+$//')"
+    fi
+
+    rm -f "${curl_err}" "${destination_path}"
+    ha_pxe::log_error "Download failed for ${label}${err_text:+: ${err_text}}"
+    return 1
+  fi
+
+  rm -f "${curl_err}"
+  current_bytes="$(wc -c < "${destination_path}")"
+  current_bytes="${current_bytes//[[:space:]]/}"
+  current_mib="$(ha_pxe::format_mib "${current_bytes}")"
+
+  if [[ "${content_length}" =~ ^[0-9]+$ ]] && (( content_length > 0 )); then
+    total_mib="$(ha_pxe::format_mib "${content_length}")"
+    ha_pxe::log_info "Downloaded ${label}: 100% (${current_mib} MiB/${total_mib} MiB)"
+  else
+    ha_pxe::log_info "Downloaded ${label}: ${current_mib} MiB"
+  fi
+}
+
 ha_pxe::reset_runtime_state() {
   local mount_point
 
@@ -199,8 +310,7 @@ ha_pxe::download_image() {
   tmp_path="${archive_path}.download"
 
   if [[ ! -s "${archive_path}" ]]; then
-    ha_pxe::log_info "Downloading ${url##*/}"
-    curl -fL "${url}" -o "${tmp_path}"
+    ha_pxe::download_with_progress "${url}" "${tmp_path}" "${url##*/}"
     mv "${tmp_path}" "${archive_path}"
   else
     ha_pxe::log_info "Reusing cached image archive ${archive_path##*/}"
@@ -263,9 +373,15 @@ ha_pxe::populate_from_image() {
   mount_root="$(mktemp -d "${HA_PXE_TMP_DIR}/root.XXXXXX")"
   trap cleanup_mounts RETURN
 
-  mount -o loop,ro,offset="${boot_offset}" -t vfat "${image_path}" "${mount_boot}"
+  if ! mount -o loop,ro,offset="${boot_offset}" -t vfat "${image_path}" "${mount_boot}"; then
+    ha_pxe::log_error "Failed to mount the boot partition from ${image_path}. Disable Protection mode and restart the add-on if it is still enabled."
+    return 1
+  fi
   mounted_boot=true
-  mount -o loop,ro,offset="${root_offset}" -t ext4 "${image_path}" "${mount_root}"
+  if ! mount -o loop,ro,offset="${root_offset}" -t ext4 "${image_path}" "${mount_root}"; then
+    ha_pxe::log_error "Failed to mount the root partition from ${image_path}. Disable Protection mode and restart the add-on if it is still enabled."
+    return 1
+  fi
   mounted_root=true
 
   ha_pxe::clear_directory "${boot_dir}"

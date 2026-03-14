@@ -11,6 +11,7 @@ main() {
   ha_pxe::ensure_directories
   ha_pxe::reset_runtime_state
   ha_pxe::validate_config
+  ha_pxe::require_mount_support
 
   local server_ip
   server_ip="$(ha_pxe::resolve_server_ip)"
