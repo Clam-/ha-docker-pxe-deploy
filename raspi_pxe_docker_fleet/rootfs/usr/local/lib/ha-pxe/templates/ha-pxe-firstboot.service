@@ -9,6 +9,9 @@ ConditionPathExists=!/var/lib/ha-pxe/firstboot.done
 Type=oneshot
 ExecStart=/usr/local/sbin/ha-pxe-firstboot
 RemainAfterExit=yes
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

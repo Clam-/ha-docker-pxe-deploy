@@ -552,10 +552,27 @@ ha_pxe::bind_tftp_tree() {
   fi
 }
 
+ha_pxe::model_needs_root_bootcode() {
+  case "${1}" in
+    pi2|pi3|cm3)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 ha_pxe::publish_root_tftp_firmware() {
   local boot_dir="${1}"
   local serial="${2}"
+  local model="${3}"
   local file_name source_path target_path
+
+  if ! ha_pxe::model_needs_root_bootcode "${model}"; then
+    ha_pxe::log_debug "Skipping shared root TFTP firmware for ${serial}; model ${model} uses EEPROM boot and should fetch prefixed start*.elf files instead"
+    return 0
+  fi
 
   for file_name in bootcode.bin bootsig.bin; do
     source_path="${boot_dir}/${file_name}"

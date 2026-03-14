@@ -11,6 +11,24 @@ configuration:
   default_password:
     name: Default password
     description: Optional password for the created user. Supply this or SSH authorized keys.
+  default_timezone:
+    name: Default timezone
+    description: >-
+      Optional IANA timezone name to apply on first boot. Leave blank to keep
+      the image default. Examples: Australia/Melbourne, America/New_York,
+      Europe/London. Full timezone list: https://data.iana.org/time-zones/tzdb-2025a/zone1970.tab
+  default_keyboard_layout:
+    name: Default keyboard layout
+    description: >-
+      Optional XKB keyboard layout code to apply on first boot. Leave blank to
+      keep the image default. Examples: gb, us, de, fr. Layout list:
+      https://sources.debian.org/src/xkeyboard-config/2.42-1/rules/base.lst/
+  default_locale:
+    name: Default locale
+    description: >-
+      Optional locale name to apply on first boot. Leave blank to keep the
+      image default. Examples: en_AU.UTF-8, en_US.UTF-8, de_DE.UTF-8. Locale
+      list: https://sources.debian.org/src/glibc/2.31-11/localedata/SUPPORTED/
   ssh_authorized_keys:
     name: SSH authorized keys
     description: Optional newline-separated public keys for the created user.

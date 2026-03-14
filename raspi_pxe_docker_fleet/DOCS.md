@@ -22,6 +22,9 @@ log_level: info
 server_ip: 192.168.25.250
 default_username: pi
 default_password: ""
+default_timezone: Australia/Melbourne
+default_keyboard_layout: us
+default_locale: en_AU.UTF-8
 ssh_authorized_keys: |
   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN lee@example-macbook
   ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDJ1i4WqQzK8V7o0xJ3mQeP1Xr1d9Yxk5oG4nM7lR0pA2uN6sB8wQ3nK6vM9cT1yP4wF7aL2mD8hQ9nS3gB5fL1zK0pR6tN8vQ2xC4mH7jL9sP1dF3gH5jK7mN9pQ2rT4vW6xY8zA0bC2dE4fG6hJ8kL0mN2pQ4rS6tU8vW0xY2z user@example
@@ -52,6 +55,15 @@ clients:
   and NFS. Leave it blank to auto-detect.
 - `default_username`: User created on each Raspberry Pi at first boot.
 - `default_password`: Optional password for that user.
+- `default_timezone`: Optional IANA timezone name to apply on first boot, such
+  as `Australia/Melbourne` or `America/New_York`. Leave blank to keep the image
+  default. Full list: `https://data.iana.org/time-zones/tzdb-2025a/zone1970.tab`
+- `default_keyboard_layout`: Optional XKB keyboard layout code to apply on
+  first boot, such as `gb`, `us`, or `de`. Leave blank to keep the image
+  default. Layout list: `https://sources.debian.org/src/xkeyboard-config/2.42-1/rules/base.lst/`
+- `default_locale`: Optional locale name to apply on first boot, such as
+  `en_AU.UTF-8`, `en_US.UTF-8`, or `de_DE.UTF-8`. Leave blank to keep the image
+  default. Locale list: `https://sources.debian.org/src/glibc/2.31-11/localedata/SUPPORTED/`
 - `ssh_authorized_keys`: Optional newline-separated OpenSSH public keys.
   Each key must be the full line, including key type, base64 payload, and
   optional comment.
@@ -98,6 +110,9 @@ log_level: info
 server_ip: ""
 default_username: pi
 default_password: ""
+default_timezone: ""
+default_keyboard_layout: ""
+default_locale: ""
 ssh_authorized_keys: |
   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN lee@example-macbook
 clients:
@@ -125,7 +140,9 @@ the network.
   pulled and started with Docker defaults.
 - The client root filesystem is stored under `/data`, so client state survives
   add-on restarts.
-- Raspberry Pi 3-class network boot first requests `/bootcode.bin` from the
-  TFTP root, then typically probes `/bootsig.bin`. The add-on publishes
-  `bootcode.bin` at the TFTP root automatically. A missing `bootsig.bin` is
-  normally expected.
+- Raspberry Pi 2 v1.2, Pi 3, and CM3-class network boot first request
+  `/bootcode.bin` from the TFTP root, then typically probe `/bootsig.bin`.
+  The add-on only publishes root-level `bootcode.bin` for those legacy models.
+- Raspberry Pi 4, 400, CM4, Pi 5, 500, and CM5 use the EEPROM bootloader
+  instead of `bootcode.bin`. Those models should fetch `start4.elf` or
+  `start.elf` from the per-client prefixed directory.

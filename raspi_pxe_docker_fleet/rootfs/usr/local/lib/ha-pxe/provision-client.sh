@@ -66,10 +66,14 @@ write_bootstrap_files() {
   local hostname="${3}"
   local containers_raw="${4}"
   local username password keys groups group authorized_keys_path
+  local default_timezone default_keyboard_layout default_locale
 
   username="$(ha_pxe::config_string '.default_username')"
   password="$(ha_pxe::config_string '.default_password')"
   keys="$(ha_pxe::config_string '.ssh_authorized_keys')"
+  default_timezone="$(ha_pxe::config_string '.default_timezone')"
+  default_keyboard_layout="$(ha_pxe::config_string '.default_keyboard_layout')"
+  default_locale="$(ha_pxe::config_string '.default_locale')"
 
   mkdir -p "${root_dir}/etc/ha-pxe"
   mkdir -p "${root_dir}/usr/local/sbin"
@@ -98,6 +102,9 @@ PXE_PASSWORD_HASH=$(printf '%q' "${password:+$(openssl passwd -6 "${password}")}
 PXE_HOSTNAME=$(printf '%q' "${hostname}")
 PXE_SERIAL=$(printf '%q' "${serial}")
 PXE_EXTRA_GROUPS=$(printf '%q' "${groups}")
+PXE_DEFAULT_TIMEZONE=$(printf '%q' "${default_timezone}")
+PXE_DEFAULT_KEYBOARD_LAYOUT=$(printf '%q' "${default_keyboard_layout}")
+PXE_DEFAULT_LOCALE=$(printf '%q' "${default_locale}")
 EOF
 
   authorized_keys_path="${root_dir}/etc/ha-pxe/authorized_keys"
@@ -186,7 +193,7 @@ main() {
   ha_pxe::log_info "Registering NFS exports for ${serial}"
   ha_pxe::append_exports "${boot_dir}" "${root_dir}"
   ha_pxe::log_info "Publishing shared TFTP firmware for ${serial}"
-  ha_pxe::publish_root_tftp_firmware "${boot_dir}" "${serial}"
+  ha_pxe::publish_root_tftp_firmware "${boot_dir}" "${serial}" "${model}"
   ha_pxe::log_info "Binding TFTP trees for ${serial} and ${short_serial}"
   ha_pxe::bind_tftp_tree "${boot_dir}" "${serial}" "${short_serial}"
 
