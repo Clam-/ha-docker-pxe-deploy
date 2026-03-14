@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 HA_PXE_ROOT="/data"
+HA_PXE_OPTIONS_FILE="${HA_PXE_ROOT}/options.json"
 HA_PXE_CACHE_DIR="${HA_PXE_ROOT}/cache/images"
 HA_PXE_EXPORTS_DIR="${HA_PXE_ROOT}/exports"
 HA_PXE_RUNTIME_DIR="${HA_PXE_ROOT}/runtime"
@@ -48,6 +49,19 @@ ha_pxe::ensure_directories() {
   : > "${HA_PXE_EXPORTS_FILE}"
 }
 
+ha_pxe::config_string() {
+  local filter="${1}"
+
+  jq -r "${filter} // empty" "${HA_PXE_OPTIONS_FILE}"
+}
+
+ha_pxe::config_json() {
+  local filter="${1}"
+  local default_json="${2:-null}"
+
+  jq -c "${filter} // ${default_json}" "${HA_PXE_OPTIONS_FILE}"
+}
+
 ha_pxe::reset_runtime_state() {
   local mount_point
 
@@ -63,14 +77,10 @@ ha_pxe::reset_runtime_state() {
 ha_pxe::validate_config() {
   local username password keys clients_json
 
-  username="$(bashio::config 'default_username')"
-  password="$(bashio::config 'default_password')"
-  keys="$(bashio::config 'ssh_authorized_keys')"
-  clients_json="$(bashio::config 'clients')"
-
-  [[ "${password}" == "null" ]] && password=""
-  [[ "${keys}" == "null" ]] && keys=""
-  [[ "${clients_json}" == "null" ]] && clients_json="[]"
+  username="$(ha_pxe::config_string '.default_username')"
+  password="$(ha_pxe::config_string '.default_password')"
+  keys="$(ha_pxe::config_string '.ssh_authorized_keys')"
+  clients_json="$(ha_pxe::config_json '.clients' '[]')"
 
   if [[ -z "${password}" && -z "${keys}" ]]; then
     ha_pxe::log_error "Set either default_password or ssh_authorized_keys so the client user can be accessed"
@@ -90,8 +100,8 @@ ha_pxe::validate_config() {
 ha_pxe::resolve_server_ip() {
   local configured ip
 
-  configured="$(bashio::config 'server_ip')"
-  if [[ -n "${configured}" && "${configured}" != "null" ]]; then
+  configured="$(ha_pxe::config_string '.server_ip')"
+  if [[ -n "${configured}" ]]; then
     printf '%s\n' "${configured}"
     return 0
   fi

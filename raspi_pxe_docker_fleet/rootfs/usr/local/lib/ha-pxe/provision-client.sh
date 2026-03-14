@@ -54,11 +54,9 @@ write_bootstrap_files() {
   local containers_raw="${4}"
   local username password keys groups group authorized_keys_path
 
-  username="$(bashio::config 'default_username')"
-  password="$(bashio::config 'default_password')"
-  keys="$(bashio::config 'ssh_authorized_keys')"
-  [[ "${password}" == "null" ]] && password=""
-  [[ "${keys}" == "null" ]] && keys=""
+  username="$(ha_pxe::config_string '.default_username')"
+  password="$(ha_pxe::config_string '.default_password')"
+  keys="$(ha_pxe::config_string '.ssh_authorized_keys')"
 
   mkdir -p "${root_dir}/etc/ha-pxe"
   mkdir -p "${root_dir}/usr/local/sbin"

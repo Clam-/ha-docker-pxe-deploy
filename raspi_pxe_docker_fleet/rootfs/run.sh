@@ -20,10 +20,7 @@ main() {
   ha_pxe::write_dhcp_hints "${server_ip}"
 
   local clients_json
-  clients_json="$(bashio::config 'clients')"
-  if [[ -z "${clients_json}" || "${clients_json}" == "null" ]]; then
-    clients_json='[]'
-  fi
+  clients_json="$(ha_pxe::config_json '.clients' '[]')"
 
   while IFS= read -r client_json; do
     [[ -n "${client_json}" ]] || continue
