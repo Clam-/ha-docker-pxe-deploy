@@ -344,12 +344,46 @@ ha_pxe::clear_directory() {
   find "${dir}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 }
 
+ha_pxe::cleanup_loop_devices_for_image() {
+  local image_path="${1}"
+  local loop_device
+
+  while IFS= read -r loop_device; do
+    [[ -n "${loop_device}" ]] || continue
+    loop_device="${loop_device%:}"
+
+    if findmnt -rn -o SOURCE | grep -q "^${loop_device}\\(p[0-9]\\+\\)\?$"; then
+      ha_pxe::log_warning "Loop device ${loop_device} is still mounted; leaving it attached"
+      continue
+    fi
+
+    ha_pxe::log_warning "Detaching stale loop device ${loop_device} for ${image_path##*/}"
+    losetup -d "${loop_device}" || true
+  done < <(losetup -j "${image_path}" | awk -F: '{print $1}')
+}
+
+ha_pxe::wait_for_block_device() {
+  local block_device="${1}"
+  local attempts="${2:-20}"
+  local attempt=0
+
+  while (( attempt < attempts )); do
+    if [[ -b "${block_device}" ]]; then
+      return 0
+    fi
+    sleep 0.5
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
+
 ha_pxe::populate_from_image() {
   local image_path="${1}"
   local boot_dir="${2}"
   local root_dir="${3}"
-  local boot_offset root_offset mount_boot mount_root
-  local mounted_boot=false mounted_root=false
+  local mount_boot mount_root loop_device boot_partition root_partition
+  local mounted_boot=false mounted_root=false loop_attached=false
 
   cleanup_mounts() {
     if [[ "${mounted_root}" == "true" ]]; then
@@ -358,36 +392,56 @@ ha_pxe::populate_from_image() {
     if [[ "${mounted_boot}" == "true" ]]; then
       umount "${mount_boot}" || true
     fi
+    if [[ "${loop_attached}" == "true" ]]; then
+      losetup -d "${loop_device}" || true
+    fi
     rmdir "${mount_boot}" "${mount_root}" 2>/dev/null || true
   }
-
-  boot_offset="$(ha_pxe::partition_offset_bytes "${image_path}" 1)"
-  root_offset="$(ha_pxe::partition_offset_bytes "${image_path}" 2)"
-
-  if [[ -z "${boot_offset}" || -z "${root_offset}" ]]; then
-    ha_pxe::log_error "Unable to determine image partition offsets for ${image_path}"
-    return 1
-  fi
 
   mount_boot="$(mktemp -d "${HA_PXE_TMP_DIR}/boot.XXXXXX")"
   mount_root="$(mktemp -d "${HA_PXE_TMP_DIR}/root.XXXXXX")"
   trap cleanup_mounts RETURN
 
-  if ! mount -o loop,ro,offset="${boot_offset}" -t vfat "${image_path}" "${mount_boot}"; then
-    ha_pxe::log_error "Failed to mount the boot partition from ${image_path}. Disable Protection mode and restart the add-on if it is still enabled."
+  ha_pxe::log_info "Preparing loop device for ${image_path##*/}"
+  ha_pxe::cleanup_loop_devices_for_image "${image_path}"
+
+  if ! loop_device="$(losetup --find --show --read-only --partscan "${image_path}")"; then
+    ha_pxe::log_error "Failed to create a loop device for ${image_path}"
+    return 1
+  fi
+  loop_attached=true
+  boot_partition="${loop_device}p1"
+  root_partition="${loop_device}p2"
+
+  ha_pxe::log_info "Attached ${image_path##*/} to ${loop_device}"
+  ha_pxe::log_info "Waiting for partition devices ${boot_partition} and ${root_partition}"
+  if ! ha_pxe::wait_for_block_device "${boot_partition}" || ! ha_pxe::wait_for_block_device "${root_partition}"; then
+    ha_pxe::log_error "Partition devices for ${loop_device} did not appear"
+    return 1
+  fi
+
+  ha_pxe::log_info "Mounting boot partition ${boot_partition} to ${mount_boot}"
+  if ! mount -o ro -t vfat "${boot_partition}" "${mount_boot}"; then
+    ha_pxe::log_error "Failed to mount boot partition ${boot_partition} from ${image_path}"
     return 1
   fi
   mounted_boot=true
-  if ! mount -o loop,ro,offset="${root_offset}" -t ext4 "${image_path}" "${mount_root}"; then
-    ha_pxe::log_error "Failed to mount the root partition from ${image_path}. Disable Protection mode and restart the add-on if it is still enabled."
+
+  ha_pxe::log_info "Mounting root partition ${root_partition} to ${mount_root}"
+  if ! mount -o ro -t ext4 "${root_partition}" "${mount_root}"; then
+    ha_pxe::log_error "Failed to mount root partition ${root_partition} from ${image_path}"
     return 1
   fi
   mounted_root=true
 
+  ha_pxe::log_info "Clearing target boot export ${boot_dir}"
   ha_pxe::clear_directory "${boot_dir}"
+  ha_pxe::log_info "Clearing target root export ${root_dir}"
   ha_pxe::clear_directory "${root_dir}"
 
+  ha_pxe::log_info "Syncing boot files into ${boot_dir}"
   rsync -a --delete "${mount_boot}/" "${boot_dir}/"
+  ha_pxe::log_info "Syncing root filesystem into ${root_dir}"
   rsync -aHAX --numeric-ids --delete "${mount_root}/" "${root_dir}/"
 
   sync

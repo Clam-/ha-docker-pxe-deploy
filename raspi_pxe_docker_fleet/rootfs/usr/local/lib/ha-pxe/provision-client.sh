@@ -129,6 +129,7 @@ main() {
 
   ha_pxe::warn_if_model_needs_manual_attention "${model}"
   arch="$(ha_pxe::image_arch_for_model "${model}" "${arch_override}")"
+  ha_pxe::log_info "Preparing client ${hostname} (${serial}) for model ${model} with image arch ${arch}"
 
   boot_dir="${HA_PXE_EXPORTS_DIR}/${serial}/boot"
   root_dir="${HA_PXE_EXPORTS_DIR}/${serial}/root"
@@ -157,15 +158,21 @@ main() {
 
   if [[ ! -f "${root_dir}/etc/os-release" || ! -f "${boot_dir}/cmdline.txt" ]]; then
     image_url="$(ha_pxe::latest_image_url "${arch}")"
+    ha_pxe::log_info "Selected Raspberry Pi OS image ${image_url}"
     image_path="$(ha_pxe::download_image "${image_url}")"
+    ha_pxe::log_info "Populating exports for ${serial} from ${image_path}"
     ha_pxe::populate_from_image "${image_path}" "${boot_dir}" "${root_dir}"
     ha_pxe::write_client_state "${state_file}" "${model}" "${arch}" "${image_url}"
   fi
 
+  ha_pxe::log_info "Writing PXE boot configuration for ${serial}"
   rewrite_cmdline "${boot_dir}" "${server_ip}" "${root_dir}"
   rewrite_fstab "${root_dir}" "${server_ip}" "${boot_dir}"
+  ha_pxe::log_info "Injecting first-boot bootstrap for ${serial}"
   write_bootstrap_files "${root_dir}" "${serial}" "${hostname}" "${containers_raw}"
+  ha_pxe::log_info "Registering NFS exports for ${serial}"
   ha_pxe::append_exports "${boot_dir}" "${root_dir}"
+  ha_pxe::log_info "Binding TFTP trees for ${serial} and ${short_serial}"
   ha_pxe::bind_tftp_tree "${boot_dir}" "${serial}" "${short_serial}"
 
   ha_pxe::log_info "Prepared client ${hostname} (${serial}) using ${arch}"
