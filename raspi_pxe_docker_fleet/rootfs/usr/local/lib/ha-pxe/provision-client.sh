@@ -60,6 +60,20 @@ EOF
   mv "${temp_file}" "${root_dir}/etc/fstab"
 }
 
+disable_stock_firstboot_services() {
+  local root_dir="${1}"
+
+  mkdir -p \
+    "${root_dir}/etc/systemd/system" \
+    "${root_dir}/etc/systemd/system/multi-user.target.wants"
+
+  # Raspberry Pi OS enables its own interactive first-boot wizards. Mask them
+  # so they cannot race the add-on bootstrap on headless network boots.
+  ln -snf /dev/null "${root_dir}/etc/systemd/system/userconfig.service"
+  ln -snf /dev/null "${root_dir}/etc/systemd/system/systemd-firstboot.service"
+  rm -f "${root_dir}/etc/systemd/system/multi-user.target.wants/userconfig.service"
+}
+
 write_bootstrap_files() {
   local root_dir="${1}"
   local serial="${2}"
@@ -189,6 +203,7 @@ main() {
   rewrite_cmdline "${boot_dir}" "${server_ip}" "${root_dir}"
   rewrite_fstab "${root_dir}" "${server_ip}" "${boot_dir}"
   ha_pxe::log_info "Injecting first-boot bootstrap for ${serial}"
+  disable_stock_firstboot_services "${root_dir}"
   write_bootstrap_files "${root_dir}" "${serial}" "${hostname}" "${containers_raw}"
   ha_pxe::log_info "Registering NFS exports for ${serial}"
   ha_pxe::append_exports "${boot_dir}" "${root_dir}"

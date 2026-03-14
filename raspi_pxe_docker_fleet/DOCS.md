@@ -140,6 +140,9 @@ the network.
   pulled and started with Docker defaults.
 - The client root filesystem is stored under `/data`, so client state survives
   add-on restarts.
+- The add-on masks Raspberry Pi OS stock interactive first-boot services such
+  as `userconfig.service` and `systemd-firstboot.service` so they do not open
+  local setup dialogs before the add-on bootstrap completes.
 - Raspberry Pi 2 v1.2, Pi 3, and CM3-class network boot first request
   `/bootcode.bin` from the TFTP root, then typically probe `/bootsig.bin`.
   The add-on only publishes root-level `bootcode.bin` for those legacy models.
