@@ -6,6 +6,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apk add --no-cache \
     coreutils \
     curl \
+    dnsmasq \
     dosfstools \
     e2fsprogs \
     findutils \
@@ -15,7 +16,6 @@ RUN apk add --no-cache \
     parted \
     rsync \
     shadow \
-    tftp-hpa \
     util-linux \
     xz \
     nfs-utils

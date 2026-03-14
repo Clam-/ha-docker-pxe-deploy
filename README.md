@@ -27,6 +27,8 @@ required services with `apk` inside the add-on container.
 - Accepts either short hostnames or dotted FQDN-style hostnames per client.
 - Supports configurable add-on log levels, with verbose TFTP request logging at
   `debug`.
+- Uses `dnsmasq` for TFTP service so TFTP request logs can flow directly into
+  the Home Assistant add-on logs.
 
 ## Important constraints
 

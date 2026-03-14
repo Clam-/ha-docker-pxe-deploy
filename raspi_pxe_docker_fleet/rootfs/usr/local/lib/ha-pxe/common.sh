@@ -11,10 +11,8 @@ HA_PXE_TFTP_DIR="${HA_PXE_ROOT}/tftp"
 HA_PXE_TMP_DIR="${HA_PXE_ROOT}/tmp"
 HA_PXE_EXPORTS_FILE="${HA_PXE_RUNTIME_DIR}/exports"
 HA_PXE_DHCP_HINTS_FILE="${HA_PXE_RUNTIME_DIR}/dhcp-example.txt"
-HA_PXE_SYSLOG_FILE="/var/log/messages"
 HA_PXE_OS_PAGE="https://www.raspberrypi.com/software/operating-systems/"
 HA_PXE_BG_PIDS=()
-HA_PXE_AUX_PIDS=()
 HA_PXE_LOG_LEVEL="info"
 
 ha_pxe::log_level_rank() {
@@ -252,49 +250,6 @@ ha_pxe::download_with_progress() {
   else
     ha_pxe::log_info "Downloaded ${label}: ${current_mib} MiB"
   fi
-}
-
-ha_pxe::start_tftp_log_bridge() {
-  local aux_pid
-
-  [[ "${HA_PXE_LOG_LEVEL}" == "debug" ]] || return 0
-
-  if pgrep -x syslogd >/dev/null 2>&1; then
-    if [[ -f "${HA_PXE_SYSLOG_FILE}" ]]; then
-      ha_pxe::log_info "Tailing ${HA_PXE_SYSLOG_FILE} for TFTP request logs"
-      sh -c 'tail -n 0 -F "$1" | awk '"'"'/in\.tftpd|tftpd/'"'"'' sh "${HA_PXE_SYSLOG_FILE}" &
-      aux_pid="$!"
-      sleep 1
-      if kill -0 "${aux_pid}" 2>/dev/null; then
-        HA_PXE_AUX_PIDS+=("${aux_pid}")
-      else
-        wait "${aux_pid}" || true
-        ha_pxe::log_warning "TFTP log tailer exited immediately; request logs may not appear"
-      fi
-    else
-      ha_pxe::log_warning "syslogd is already running but ${HA_PXE_SYSLOG_FILE} is unavailable; TFTP request logs may not appear"
-    fi
-    return 0
-  fi
-
-  if command -v syslogd >/dev/null 2>&1; then
-    if [[ -e /dev/log || -L /dev/log || -S /dev/log ]]; then
-      rm -f /dev/log || true
-    fi
-    ha_pxe::log_info "Starting local syslog bridge for TFTP request logs"
-    syslogd -n -O - &
-    aux_pid="$!"
-    sleep 1
-    if kill -0 "${aux_pid}" 2>/dev/null; then
-      HA_PXE_AUX_PIDS+=("${aux_pid}")
-    else
-      wait "${aux_pid}" || true
-      ha_pxe::log_warning "Local syslog bridge failed to start; TFTP request logs may not appear"
-    fi
-    return 0
-  fi
-
-  ha_pxe::log_warning "syslogd is unavailable; TFTP request logs may not appear"
 }
 
 ha_pxe::reset_runtime_state() {
@@ -644,25 +599,31 @@ ha_pxe::start_nfs_server() {
 }
 
 ha_pxe::start_tftp_server() {
-  local tftp_args=(
-    --foreground
-    --listen
-    --address 0.0.0.0:69
-    --secure
+  local dnsmasq_args=(
+    --keep-in-foreground
+    --port=0
+    --enable-tftp
+    --tftp-root="${HA_PXE_TFTP_DIR}"
+    --tftp-no-fail
+    --log-facility=-
+    --quiet-dhcp
+    --quiet-dhcp6
+    --quiet-ra
+    --bind-interfaces
   )
 
   case "${HA_PXE_LOG_LEVEL}" in
     debug)
-      tftp_args+=( --verbosity 5 )
-      ha_pxe::start_tftp_log_bridge
-      ha_pxe::log_info "TFTP request logging is enabled"
+      dnsmasq_args+=( --log-debug )
+      ha_pxe::log_info "TFTP request logging is enabled via dnsmasq"
       ;;
     *)
+      dnsmasq_args+=( --quiet-tftp )
       ;;
   esac
 
-  ha_pxe::log_debug "Starting TFTP server with root ${HA_PXE_TFTP_DIR}"
-  in.tftpd "${tftp_args[@]}" "${HA_PXE_TFTP_DIR}" &
+  ha_pxe::log_debug "Starting dnsmasq TFTP server with root ${HA_PXE_TFTP_DIR}"
+  dnsmasq "${dnsmasq_args[@]}" &
   HA_PXE_BG_PIDS+=("$!")
   ha_pxe::log_info "TFTP server is active on UDP 69"
 }
@@ -673,11 +634,6 @@ ha_pxe::shutdown() {
   for pid in "${HA_PXE_BG_PIDS[@]:-}"; do
     kill "${pid}" 2>/dev/null || true
   done
-
-  for pid in "${HA_PXE_AUX_PIDS[@]:-}"; do
-    kill "${pid}" 2>/dev/null || true
-  done
-
   while IFS= read -r mount_point; do
     [[ -n "${mount_point}" ]] || continue
     umount "${mount_point}" || true

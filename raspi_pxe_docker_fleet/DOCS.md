@@ -43,8 +43,7 @@ clients:
 ## Option reference
 
 - `log_level`: `error`, `warn`, `info`, or `debug`. `debug` enables verbose
-  provisioning logs and attempts to surface TFTP request logging through a
-  local syslog bridge.
+  provisioning logs and TFTP request logging.
 - `server_ip`: Optional override for the Home Assistant host IP that the Pi
   clients should use for TFTP and NFS. Leave blank to auto-detect.
 - `default_username`: The Linux account created on each Pi at first boot.
