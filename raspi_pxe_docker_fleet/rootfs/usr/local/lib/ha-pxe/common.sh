@@ -552,6 +552,32 @@ ha_pxe::bind_tftp_tree() {
   fi
 }
 
+ha_pxe::publish_root_tftp_firmware() {
+  local boot_dir="${1}"
+  local serial="${2}"
+  local file_name source_path target_path
+
+  for file_name in bootcode.bin bootsig.bin; do
+    source_path="${boot_dir}/${file_name}"
+    target_path="${HA_PXE_TFTP_DIR}/${file_name}"
+
+    if [[ ! -f "${source_path}" ]]; then
+      if [[ "${file_name}" == "bootsig.bin" ]]; then
+        ha_pxe::log_debug "No ${file_name} present in ${boot_dir}; Raspberry Pi ROMs commonly probe for it and usually accept file-not-found"
+      fi
+      continue
+    fi
+
+    if [[ ! -f "${target_path}" ]] || ! cmp -s "${source_path}" "${target_path}"; then
+      cp -f "${source_path}" "${target_path}"
+      chmod 0644 "${target_path}"
+      ha_pxe::log_info "Publishing shared TFTP ${file_name} from ${serial}"
+    else
+      ha_pxe::log_debug "Shared TFTP ${file_name} already matches client ${serial}"
+    fi
+  done
+}
+
 ha_pxe::write_client_state() {
   local state_file="${1}"
   local model="${2}"

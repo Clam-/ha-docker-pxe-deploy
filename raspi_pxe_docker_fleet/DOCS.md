@@ -125,3 +125,7 @@ the network.
   pulled and started with Docker defaults.
 - The client root filesystem is stored under `/data`, so client state survives
   add-on restarts.
+- Raspberry Pi 3-class network boot first requests `/bootcode.bin` from the
+  TFTP root, then typically probes `/bootsig.bin`. The add-on publishes
+  `bootcode.bin` at the TFTP root automatically. A missing `bootsig.bin` is
+  normally expected.

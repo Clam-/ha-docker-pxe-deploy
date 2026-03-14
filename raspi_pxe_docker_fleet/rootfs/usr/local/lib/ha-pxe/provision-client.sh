@@ -185,6 +185,8 @@ main() {
   write_bootstrap_files "${root_dir}" "${serial}" "${hostname}" "${containers_raw}"
   ha_pxe::log_info "Registering NFS exports for ${serial}"
   ha_pxe::append_exports "${boot_dir}" "${root_dir}"
+  ha_pxe::log_info "Publishing shared TFTP firmware for ${serial}"
+  ha_pxe::publish_root_tftp_firmware "${boot_dir}" "${serial}"
   ha_pxe::log_info "Binding TFTP trees for ${serial} and ${short_serial}"
   ha_pxe::bind_tftp_tree "${boot_dir}" "${serial}" "${short_serial}"
 
