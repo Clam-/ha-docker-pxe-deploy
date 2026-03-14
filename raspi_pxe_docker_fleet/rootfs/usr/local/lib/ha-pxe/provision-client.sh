@@ -72,6 +72,14 @@ disable_stock_firstboot_services() {
   ln -snf /dev/null "${root_dir}/etc/systemd/system/userconfig.service"
   ln -snf /dev/null "${root_dir}/etc/systemd/system/systemd-firstboot.service"
   rm -f "${root_dir}/etc/systemd/system/multi-user.target.wants/userconfig.service"
+
+  # The userconf-pi package also drops an SSH pre-auth banner warning until its
+  # own rename flow runs. We create the user ourselves, so remove the banner
+  # config directly from the exported root.
+  rm -f "${root_dir}/etc/ssh/sshd_config.d/rename_user.conf"
+  if [[ -f "${root_dir}/usr/share/userconf-pi/sshd_banner" ]]; then
+    : > "${root_dir}/usr/share/userconf-pi/sshd_banner"
+  fi
 }
 
 write_bootstrap_files() {

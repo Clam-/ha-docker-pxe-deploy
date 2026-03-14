@@ -1,7 +1,7 @@
 [Unit]
 Description=Home Assistant PXE client first boot provisioning
 Wants=network-online.target
-After=network-online.target
+After=network-online.target cloud-final.service
 ConditionPathExists=/etc/ha-pxe/bootstrap.env
 ConditionPathExists=!/var/lib/ha-pxe/firstboot.done
 

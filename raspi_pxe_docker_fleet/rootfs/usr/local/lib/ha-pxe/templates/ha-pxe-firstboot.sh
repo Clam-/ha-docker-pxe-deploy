@@ -25,6 +25,17 @@ configure_ssh_keys() {
   install -m 600 -o "${PXE_USERNAME}" -g "${PXE_USERNAME}" /etc/ha-pxe/authorized_keys "/home/${PXE_USERNAME}/.ssh/authorized_keys"
 }
 
+clear_stock_ssh_banner() {
+  if command -v cancel-rename >/dev/null 2>&1; then
+    cancel-rename "${PXE_USERNAME}" >/dev/null 2>&1 || true
+  fi
+
+  rm -f /etc/ssh/sshd_config.d/rename_user.conf
+  if [[ -f /usr/share/userconf-pi/sshd_banner ]]; then
+    : > /usr/share/userconf-pi/sshd_banner
+  fi
+}
+
 seed_noninteractive_defaults() {
   local keyboard_model="pc105"
   local keyboard_layout="gb"
@@ -288,6 +299,7 @@ main() {
 
   ensure_group_memberships
   configure_ssh_keys
+  clear_stock_ssh_banner
 
   systemctl daemon-reload
   systemctl enable docker.service
@@ -296,6 +308,7 @@ main() {
   systemctl enable ha-pxe-container-sync.timer
   systemctl start docker.service
   systemctl start ssh.service || true
+  systemctl try-reload-or-restart ssh.service || true
   systemctl start ha-pxe-container-sync.service || true
   systemctl start ha-pxe-container-sync.timer
 
