@@ -54,7 +54,8 @@ Client fields:
 
 - `serial`: Raspberry Pi serial number used for the network boot directory.
 - `model`: Model family used to select the image architecture.
-- `hostname`: Hostname written into the client rootfs.
+- `hostname`: Hostname written into the client rootfs. Short names and dotted
+  FQDN-style hostnames are accepted.
 - `image_arch`: `auto`, `armhf`, or `arm64`. `auto` maps Pi 0/1/2 to `armhf`
   and newer families to `arm64`.
 - `rebuild`: If `true`, the exported boot/root trees for that client are

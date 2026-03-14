@@ -24,6 +24,7 @@ required services with `apk` inside the add-on container.
 - Creates a named user on the client at first boot.
 - Installs Docker on the client and reconciles a configured list of container
   images.
+- Accepts either short hostnames or dotted FQDN-style hostnames per client.
 
 ## Important constraints
 
