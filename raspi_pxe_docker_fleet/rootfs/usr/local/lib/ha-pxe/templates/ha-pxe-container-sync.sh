@@ -60,6 +60,53 @@ ensure_docker_running() {
   systemctl start docker.service
 }
 
+sort_container_specs_json() {
+  local specs_json="${1:-[]}"
+  local sorted
+
+  if ! sorted="$(
+    jq -cS '
+      def topo_sort:
+        (map({key: .name, value: .}) | from_entries) as $specs
+        | def visit($name; $state):
+            if $state.permanent[$name] then
+              $state
+            elif $state.temporary[$name] then
+              error("Container dependency cycle detected involving \($name)")
+            else
+              ($specs[$name] // error("Container depends_on references an unknown container: \($name)")) as $spec
+              | reduce $spec.depends_on[] as $dep (
+                  ($state | .temporary[$name] = true);
+                  if $dep == $name then
+                    error("Container \($name) cannot depend on itself")
+                  elif ($specs[$dep] | type) == "null" then
+                    error("Container \($name) depends on undefined container \($dep)")
+                  else
+                    visit($dep; .)
+                  end
+                )
+              | .temporary |= del(.[$name])
+              | .permanent[$name] = true
+              | .ordered += [$spec]
+            end;
+
+        reduce .[].name as $name (
+          {temporary: {}, permanent: {}, ordered: []};
+          visit($name; .)
+        )
+        | .ordered;
+
+      topo_sort
+    ' <<<"${specs_json}" 2>&1
+  )"; then
+    sorted="$(sed -E 's/^jq: error \(at <stdin>:[0-9]+\): //' <<<"${sorted}")"
+    log_error "${sorted}"
+    return 1
+  fi
+
+  printf '%s\n' "${sorted}"
+}
+
 resolve_relative_path() {
   local base_dir="${1}"
   local relative_path="${2}"
@@ -426,7 +473,7 @@ cleanup_stale_state_dirs() {
 }
 
 main() {
-  local spec key
+  local spec key desired_json
   local had_error=false
   declare -A desired_keys=()
 
@@ -439,6 +486,10 @@ main() {
     exit 1
   fi
 
+  if ! desired_json="$(sort_container_specs_json "$(jq -cS '.' "${DESIRED_FILE}")")"; then
+    exit 1
+  fi
+
   ensure_docker_running
   mkdir -p "${STATE_ROOT}"
 
@@ -446,7 +497,7 @@ main() {
     [[ -n "${spec}" ]] || continue
     key="$(spec_key "${spec}")"
     desired_keys["${key}"]=1
-  done < <(jq -c '.[]?' "${DESIRED_FILE}")
+  done < <(jq -c '.[]?' <<<"${desired_json}")
 
   while IFS= read -r spec; do
     [[ -n "${spec}" ]] || continue
@@ -454,7 +505,7 @@ main() {
       log_error "Failed to reconcile $(jq -r '.name' <<<"${spec}")"
       had_error=true
     fi
-  done < <(jq -c '.[]?' "${DESIRED_FILE}")
+  done < <(jq -c '.[]?' <<<"${desired_json}")
 
   cleanup_stale_containers desired_keys
   cleanup_stale_state_dirs desired_keys

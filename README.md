@@ -48,7 +48,8 @@ a Git URL”, the correct interpretation in this repository is:
 - do not assume Docker Compose will be run directly by this add-on
 - model it as a Git-backed remote build on the client
 - translate Compose-like settings into the add-on container spec fields such as
-  `env`, `files`, `volumes`, `ports`, `devices`, `network_mode`, and `command`
+  `env`, `files`, `volumes`, `ports`, `devices`, `network_mode`, `depends_on`,
+  and `command`
 
 Preferred agent behavior when generating configs:
 
@@ -65,13 +66,15 @@ Preferred agent behavior when generating configs:
   runtime mechanism for this add-on.
 
 For the thermostat example, the correct agent output is a JSON `containers`
-entry with:
+definition with:
 
+- a separate `rgpiod` entry for `https://github.com/Clam-/docker-rgpio.git`
 - `source.type: git`
-- `url: https://github.com/Clam-/ha-pxe-janky-thermostat.git`
-- `dockerfile: Dockerfile`
+- `depends_on: ["rgpiod"]` on the thermostat entry
+- `url: https://github.com/Clam-/ha-pxe-janky-thermostat.git` for the thermostat
+- `dockerfile: Dockerfile` for each Git-backed build
 - generated `files` content for `/config/config.json`
-- any required runtime `env` overrides such as MQTT and pigpio endpoints
+- any required runtime `env` and `extra_hosts` overrides such as MQTT and pigpio endpoints
 
 ## Notes
 

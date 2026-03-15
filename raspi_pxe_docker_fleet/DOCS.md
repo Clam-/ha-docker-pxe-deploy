@@ -36,6 +36,27 @@ clients:
     containers: |
       [
         {
+          "name": "rgpiod",
+          "image": "local/rgpiod:latest",
+          "source": {
+            "type": "git",
+            "url": "https://github.com/Clam-/docker-rgpio.git",
+            "ref": "main",
+            "context": ".",
+            "dockerfile": "Dockerfile"
+          },
+          "env": {
+            "RGPIOD_PORT": "8889",
+            "RGPIOD_LOCAL_ONLY": "0"
+          },
+          "ports": [
+            "8889:8889"
+          ],
+          "devices": [
+            "/dev/gpiochip0:/dev/gpiochip0"
+          ]
+        },
+        {
           "name": "janky-thermostat",
           "source": {
             "type": "git",
@@ -44,13 +65,19 @@ clients:
             "context": ".",
             "dockerfile": "Dockerfile"
           },
+          "depends_on": [
+            "rgpiod"
+          ],
           "env": {
             "MQTT_BROKER": "mosquitto",
             "MQTT_PORT": "1883",
-            "PIGPIO_ADDR": "pigpio",
-            "PIGPIO_PORT": "8888",
+            "PIGPIO_ADDR": "host.docker.internal",
+            "PIGPIO_PORT": "8889",
             "I2C_BUS": "0"
           },
+          "extra_hosts": [
+            "host.docker.internal:host-gateway"
+          ],
           "files": [
             {
               "container_path": "/config/config.json",
@@ -71,8 +98,8 @@ clients:
                 "updaterate": 15,
                 "updir": 1,
                 "i2c_bus": 0,
-                "pigpio_addr": "pigpio",
-                "pigpio_port": 8888,
+                "pigpio_addr": "host.docker.internal",
+                "pigpio_port": 8889,
                 "loglevel": "WARNING"
               }
             }
@@ -134,6 +161,7 @@ Top-level container fields:
 - `network_mode`: Optional Docker network mode such as `host`.
 - `privileged`: Optional boolean.
 - `workdir`: Optional working directory inside the container.
+- `depends_on`: Optional array of managed container names, or an object using those names as keys. Dependencies only affect reconciliation order.
 - `env`: Object of environment variables.
 - `labels`: Object of Docker labels.
 - `devices`: Array of Docker `--device` strings.
@@ -160,13 +188,34 @@ Top-level container fields:
 - `mode`: File mode string such as `0644`.
 - `read_only`: Whether the generated mount should be `:ro`. Defaults to `true`.
 
-## Thermostat example
+## Thermostat plus `rgpiod` example
 
-The `ha-pxe-janky-thermostat` repo can be deployed with a Git source and a generated JSON config file:
+The `ha-pxe-janky-thermostat` repo can be deployed alongside `docker-rgpio`, with `depends_on` ensuring the GPIO daemon is reconciled first:
 
 ```yaml
 containers: |
   [
+    {
+      "name": "rgpiod",
+      "image": "local/rgpiod:latest",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/Clam-/docker-rgpio.git",
+        "ref": "main",
+        "context": ".",
+        "dockerfile": "Dockerfile"
+      },
+      "env": {
+        "RGPIOD_PORT": "8889",
+        "RGPIOD_LOCAL_ONLY": "0"
+      },
+      "ports": [
+        "8889:8889"
+      ],
+      "devices": [
+        "/dev/gpiochip0:/dev/gpiochip0"
+      ]
+    },
     {
       "name": "janky-thermostat",
       "source": {
@@ -176,10 +225,17 @@ containers: |
         "context": ".",
         "dockerfile": "Dockerfile"
       },
+      "depends_on": [
+        "rgpiod"
+      ],
       "env": {
         "MQTT_BROKER": "mosquitto",
-        "PIGPIO_ADDR": "pigpio"
+        "PIGPIO_ADDR": "host.docker.internal",
+        "PIGPIO_PORT": "8889"
       },
+      "extra_hosts": [
+        "host.docker.internal:host-gateway"
+      ],
       "files": [
         {
           "container_path": "/config/config.json",
@@ -198,8 +254,8 @@ containers: |
             "updaterate": 15,
             "updir": 1,
             "i2c_bus": 0,
-            "pigpio_addr": "pigpio",
-            "pigpio_port": 8888,
+            "pigpio_addr": "host.docker.internal",
+            "pigpio_port": 8889,
             "loglevel": "WARNING"
           }
         }
@@ -210,11 +266,12 @@ containers: |
 
 That causes the Raspberry Pi client to:
 
-1. Clone or update the Git repo locally.
-2. Build the image locally on the Pi.
-3. Write the JSON config file under its managed state directory.
-4. Bind-mount that file to `/config/config.json`.
-5. Recreate the container when the repo, build args, or runtime spec changes.
+1. Clone or update the `docker-rgpio` Git repo locally and build it on the Pi.
+2. Start `rgpiod` with the requested GPIO device mappings and published port.
+3. Clone or update the thermostat repo and build it on the Pi.
+4. Write the thermostat JSON config file under its managed state directory.
+5. Bind-mount that file to `/config/config.json`.
+6. Recreate either container when its repo, build args, or runtime spec changes.
 
 ## Operational notes
 
@@ -223,6 +280,7 @@ That causes the Raspberry Pi client to:
 - Raw Dockerfile URL mode is intended for self-contained Dockerfiles like `Dockerfile.remote` that do not depend on extra local build context.
 - Existing newline-separated image lists continue to work.
 - If two deployments would infer the same `name`, set explicit unique names in the JSON spec.
+- `depends_on` is only available in JSON mode. It controls reconcile/start order only; it does not wait for health checks or auto-create missing containers.
 - The client root filesystem is stored under `/data`, so client state survives add-on restarts.
 - Raspberry Pi 2 v1.2, Pi 3, and CM3-class network boot first request `/bootcode.bin` from the TFTP root, then typically probe `/bootsig.bin`.
 - Raspberry Pi 4, 400, CM4, Pi 5, 500, and CM5 use the EEPROM bootloader instead of `bootcode.bin`.

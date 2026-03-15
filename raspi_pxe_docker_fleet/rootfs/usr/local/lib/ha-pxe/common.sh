@@ -141,6 +141,53 @@ ha_pxe::config_json() {
   jq -c "${filter} // ${default_json}" "${HA_PXE_OPTIONS_FILE}"
 }
 
+ha_pxe::sort_container_specs_json() {
+  local specs_json="${1:-[]}"
+  local sorted
+
+  if ! sorted="$(
+    jq -cS '
+      def topo_sort:
+        (map({key: .name, value: .}) | from_entries) as $specs
+        | def visit($name; $state):
+            if $state.permanent[$name] then
+              $state
+            elif $state.temporary[$name] then
+              error("Container dependency cycle detected involving \($name)")
+            else
+              ($specs[$name] // error("Container depends_on references an unknown container: \($name)")) as $spec
+              | reduce $spec.depends_on[] as $dep (
+                  ($state | .temporary[$name] = true);
+                  if $dep == $name then
+                    error("Container \($name) cannot depend on itself")
+                  elif ($specs[$dep] | type) == "null" then
+                    error("Container \($name) depends on undefined container \($dep)")
+                  else
+                    visit($dep; .)
+                  end
+                )
+              | .temporary |= del(.[$name])
+              | .permanent[$name] = true
+              | .ordered += [$spec]
+            end;
+
+        reduce .[].name as $name (
+          {temporary: {}, permanent: {}, ordered: []};
+          visit($name; .)
+        )
+        | .ordered;
+
+      topo_sort
+    ' <<<"${specs_json}" 2>&1
+  )"; then
+    sorted="$(sed -E 's/^jq: error \(at <stdin>:[0-9]+\): //' <<<"${sorted}")"
+    ha_pxe::log_error "${sorted}"
+    return 1
+  fi
+
+  printf '%s\n' "${sorted}"
+}
+
 ha_pxe::container_specs_json() {
   local raw="${1:-}"
   local normalized
@@ -184,6 +231,17 @@ ha_pxe::container_specs_json() {
           [ $value ]
         else
           error("command must be a string or array")
+        end;
+
+      def normalize_depends_on($value):
+        if $value == null then
+          []
+        elif ($value | type) == "array" then
+          [ $value[] | tostring | slug ] | unique
+        elif ($value | type) == "object" then
+          [ $value | keys_unsorted[] | tostring | slug ] | unique
+        else
+          error("depends_on must be an array or object")
         end;
 
       def normalize_volumes($value):
@@ -369,6 +427,7 @@ ha_pxe::container_specs_json() {
             network_mode: (($item.network_mode // "") | tostring),
             privileged: ($item.privileged // false),
             workdir: (($item.workdir // "") | tostring),
+            depends_on: normalize_depends_on(($item.depends_on // null)),
             env: normalize_key_values(($item.env // {}); "env"),
             labels: normalize_key_values(($item.labels // {}); "labels"),
             files: normalize_files($item.files // []),
@@ -416,6 +475,10 @@ ha_pxe::container_specs_json() {
     ' 2>/dev/null
   )"; then
     ha_pxe::log_error "Invalid containers configuration. Use newline-separated image or source URLs, or a JSON array of container specs."
+    return 1
+  fi
+
+  if ! normalized="$(ha_pxe::sort_container_specs_json "${normalized}")"; then
     return 1
   fi
 
