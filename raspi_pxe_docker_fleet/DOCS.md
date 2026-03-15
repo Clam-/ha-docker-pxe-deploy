@@ -151,6 +151,10 @@ The add-on log now shows:
 If a first-boot or container-sync stage fails on the client, the add-on log
 receives a `stage=... status=failed` entry with the client hostname and serial.
 
+Detailed `docker build` output stays on the client in
+`var/lib/ha-pxe/containers/<container-key>/build.log`, so the systemd journal
+and add-on log remain focused on stage-level progress.
+
 Client fields:
 
 - `serial`: Raspberry Pi serial number. Hex strings with or without a `0x` prefix are accepted.

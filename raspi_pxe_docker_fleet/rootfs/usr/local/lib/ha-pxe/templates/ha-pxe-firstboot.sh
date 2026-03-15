@@ -341,11 +341,11 @@ main() {
   export NEEDRESTART_MODE=a
   log_info "Refreshing apt package indexes"
   apt-get update
-  log_info "Installing ca-certificates, curl, docker.io, git, and jq"
+  log_info "Installing ca-certificates, curl, docker.io, docker-cli, git, and jq"
   apt-get install -y --no-install-recommends \
     -o Dpkg::Options::=--force-confdef \
     -o Dpkg::Options::=--force-confold \
-    ca-certificates curl docker.io git jq
+    ca-certificates curl docker.io docker-cli git jq
   ha_pxe_client::stage_complete packages "Base packages for Docker workloads were installed"
 
   ha_pxe_client::stage_start access "Applying group memberships and SSH access settings"

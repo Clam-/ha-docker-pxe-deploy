@@ -237,10 +237,12 @@ prepare_remote_dockerfile_build() {
 build_image_if_needed() {
   local spec="${1}"
   local key="${2}"
-  local image_name existing_fingerprint
+  local state_dir="${3}"
+  local image_name existing_fingerprint build_log
   local -a build_cmd=()
 
   image_name="$(jq -r '.image' <<<"${spec}")"
+  build_log="${state_dir}/build.log"
   existing_fingerprint="$(docker image inspect --format '{{ index .Config.Labels "io.ha_pxe.build_fingerprint" }}' "${image_name}" 2>/dev/null || true)"
 
   if [[ "${existing_fingerprint}" != "${HA_PXE_BUILD_FINGERPRINT}" ]]; then
@@ -261,8 +263,15 @@ build_image_if_needed() {
 
     build_cmd+=("${HA_PXE_BUILD_CONTEXT}")
 
-    log_info "Building ${image_name}"
-    "${build_cmd[@]}" >&2
+    : > "${build_log}"
+    log_info "Building ${image_name}; detailed build output is being written to ${build_log}"
+    if ! "${build_cmd[@]}" >"${build_log}" 2>&1; then
+      log_error "Build failed for ${image_name}; detailed build output is available at ${build_log}"
+      if [[ -s "${build_log}" ]]; then
+        tail -n 20 "${build_log}" >&2 || true
+      fi
+      return 1
+    fi
     log_info "Built ${image_name} with updated fingerprint ${HA_PXE_BUILD_FINGERPRINT}"
   else
     log_info "Reusing existing image ${image_name}; build fingerprint already matches"
@@ -289,11 +298,11 @@ ensure_desired_image() {
       ;;
     git)
       prepare_git_build "${spec}" "${state_dir}"
-      build_image_if_needed "${spec}" "${key}"
+      build_image_if_needed "${spec}" "${key}" "${state_dir}"
       ;;
     dockerfile_url)
       prepare_remote_dockerfile_build "${spec}" "${state_dir}"
-      build_image_if_needed "${spec}" "${key}"
+      build_image_if_needed "${spec}" "${key}" "${state_dir}"
       ;;
     *)
       log_error "Unsupported source type: ${source_type}"
@@ -521,7 +530,12 @@ main() {
 
   ha_pxe_client::stage_start preflight "Starting managed container reconciliation for ${PXE_HOSTNAME} (${PXE_SERIAL})"
   if ! command -v docker >/dev/null 2>&1; then
-    ha_pxe_client::stage_skip preflight "Docker is not installed on the client yet; skipping container reconciliation"
+    if command -v dockerd >/dev/null 2>&1; then
+      ha_pxe_client::stage_fail preflight "Docker daemon is running but the Docker CLI is missing; install docker-cli before container reconciliation can proceed"
+      exit 1
+    fi
+
+    ha_pxe_client::stage_skip preflight "Docker CLI is not installed on the client yet; skipping container reconciliation"
     exit 0
   fi
   ha_pxe_client::stage_complete preflight "Docker CLI is available"
