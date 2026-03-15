@@ -14,6 +14,7 @@ HA_PXE_DHCP_HINTS_FILE="${HA_PXE_RUNTIME_DIR}/dhcp-example.txt"
 HA_PXE_OS_PAGE="https://www.raspberrypi.com/software/operating-systems/"
 HA_PXE_BG_PIDS=()
 HA_PXE_LOG_LEVEL="info"
+HA_PXE_MQTT_ENV_STATUS_LOGGED="false"
 
 ha_pxe::log_level_rank() {
   case "${1}" in
@@ -141,6 +142,126 @@ ha_pxe::config_json() {
   jq -c "${filter} // ${default_json}" "${HA_PXE_OPTIONS_FILE}"
 }
 
+ha_pxe::service_string() {
+  local service="${1}"
+  local key="${2}"
+  local value=""
+
+  if ! declare -F bashio::services >/dev/null 2>&1; then
+    printf '\n'
+    return 0
+  fi
+
+  if declare -F bashio::services.available >/dev/null 2>&1; then
+    if ! bashio::services.available "${service}"; then
+      printf '\n'
+      return 0
+    fi
+  fi
+
+  if ! value="$(bashio::services "${service}" "${key}" 2>/dev/null)"; then
+    printf '\n'
+    return 0
+  fi
+
+  if [[ "${value}" == "null" ]]; then
+    value=""
+  fi
+
+  printf '%s\n' "${value}"
+}
+
+ha_pxe::service_available() {
+  local service="${1}"
+
+  if ! declare -F bashio::services >/dev/null 2>&1; then
+    return 1
+  fi
+
+  if declare -F bashio::services.available >/dev/null 2>&1; then
+    bashio::services.available "${service}"
+    return $?
+  fi
+
+  return 0
+}
+
+ha_pxe::supervisor_api() {
+  local endpoint="${1}"
+
+  if [[ -z "${SUPERVISOR_TOKEN:-}" ]]; then
+    return 1
+  fi
+
+  curl -fsSL \
+    -H "Authorization: Bearer ${SUPERVISOR_TOKEN}" \
+    -H "Content-Type: application/json" \
+    "http://supervisor${endpoint}"
+}
+
+ha_pxe::host_hostname() {
+  local response hostname=""
+
+  if ! response="$(ha_pxe::supervisor_api /host/info 2>/dev/null)"; then
+    printf '\n'
+    return 0
+  fi
+
+  hostname="$(jq -r '.data.hostname // empty' <<<"${response}" 2>/dev/null || true)"
+  printf '%s\n' "${hostname}"
+}
+
+ha_pxe::mqtt_env_defaults_json() {
+  local host port username password mqtt_available
+
+  mqtt_available="false"
+  if ha_pxe::service_available mqtt; then
+    mqtt_available="true"
+  fi
+
+  host="$(ha_pxe::host_hostname)"
+  port="$(ha_pxe::service_string mqtt port)"
+  username="$(ha_pxe::service_string mqtt username)"
+  password="$(ha_pxe::service_string mqtt password)"
+
+  if [[ "${HA_PXE_MQTT_ENV_STATUS_LOGGED}" != "true" ]]; then
+    if [[ "${mqtt_available}" != "true" ]]; then
+      ha_pxe::log_warning "MQTT service is unavailable; MQTT_PORT, MQTT_USERNAME, and MQTT_PASSWORD will not be injected into child containers"
+    else
+      if [[ -z "${port}" ]]; then
+        ha_pxe::log_warning "MQTT service did not provide a port; MQTT_PORT will not be injected into child containers"
+      fi
+      if [[ -z "${username}" ]]; then
+        ha_pxe::log_warning "MQTT service did not provide a username; MQTT_USERNAME will not be injected into child containers"
+      fi
+      if [[ -z "${password}" ]]; then
+        ha_pxe::log_warning "MQTT service did not provide a password; MQTT_PASSWORD will not be injected into child containers"
+      fi
+    fi
+
+    if [[ -z "${host}" ]]; then
+      ha_pxe::log_warning "Supervisor host hostname is unavailable; MQTT_HOST and MQTT_BROKER will not be injected into child containers"
+    fi
+
+    HA_PXE_MQTT_ENV_STATUS_LOGGED="true"
+  fi
+
+  jq -cn \
+    --arg host "${host}" \
+    --arg port "${port}" \
+    --arg username "${username}" \
+    --arg password "${password}" '
+      {
+        MQTT_BROKER: (if ($host | length) > 0 then $host else null end),
+        MQTT_HOST: (if ($host | length) > 0 then $host else null end),
+        MQTT_PORT: (if ($port | length) > 0 then $port else null end),
+        MQTT_USERNAME: (if ($username | length) > 0 then $username else null end),
+        MQTT_PASSWORD: (if ($password | length) > 0 then $password else null end)
+      }
+      | with_entries(select(.value != null))
+    '
+}
+
 ha_pxe::sort_container_specs_json() {
   local specs_json="${1:-[]}"
   local sorted
@@ -190,10 +311,12 @@ ha_pxe::sort_container_specs_json() {
 
 ha_pxe::container_specs_json() {
   local raw="${1:-}"
-  local normalized
+  local mqtt_env_json normalized
+
+  mqtt_env_json="$(ha_pxe::mqtt_env_defaults_json)"
 
   if ! normalized="$(
-    jq -Rn -cS --arg raw "${raw}" '
+    jq -Rn -cS --arg raw "${raw}" --argjson mqtt_env "${mqtt_env_json}" '
       def slug:
         ascii_downcase
         | gsub("[^a-z0-9_.-]+"; "-")
@@ -428,7 +551,7 @@ ha_pxe::container_specs_json() {
             privileged: ($item.privileged // false),
             workdir: (($item.workdir // "") | tostring),
             depends_on: normalize_depends_on(($item.depends_on // null)),
-            env: normalize_key_values(($item.env // {}); "env"),
+            env: ($mqtt_env + normalize_key_values(($item.env // {}); "env")),
             labels: normalize_key_values(($item.labels // {}); "labels"),
             files: normalize_files($item.files // []),
             volumes: normalize_volumes($item.volumes // []),
