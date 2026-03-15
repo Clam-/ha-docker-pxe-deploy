@@ -302,9 +302,98 @@ That causes the Raspberry Pi client to:
 5. Bind-mount that file to `/config/config.json`.
 6. Recreate either container when its repo, build args, or runtime spec changes.
 
+## Prebuilt image workflow
+
+For NFS-root clients or slower Raspberry Pi models, prefer prebuilt registry
+images over `git` sources. The client then only pulls and runs images instead
+of cloning repos and building locally.
+
+If every client is `arm64`, publish `linux/arm64` images only. If you have a
+mix of `arm64` and `armhf` clients, publish separate tags per architecture or a
+multi-arch manifest.
+
+```yaml
+containers: |
+  [
+    {
+      "name": "rgpiod",
+      "image": "registry.home.arpa:5000/pxe/rgpiod:stable-arm64",
+      "env": {
+        "RGPIOD_PORT": "8889",
+        "RGPIOD_LOCAL_ONLY": "0"
+      },
+      "ports": [
+        "8889:8889"
+      ],
+      "devices": [
+        "/dev/gpiochip0:/dev/gpiochip0"
+      ]
+    },
+    {
+      "name": "janky-thermostat",
+      "image": "registry.home.arpa:5000/pxe/janky-thermostat:stable-arm64",
+      "depends_on": [
+        "rgpiod"
+      ],
+      "env": {
+        "MQTT_BROKER": "mosquitto",
+        "PIGPIO_ADDR": "host.docker.internal",
+        "PIGPIO_PORT": "8889"
+      },
+      "extra_hosts": [
+        "host.docker.internal:host-gateway"
+      ],
+      "files": [
+        {
+          "container_path": "/config/config.json",
+          "format": "json",
+          "content": {
+            "mqtt_broker": "mosquitto",
+            "mqtt_port": 1883,
+            "schedule": ["06:00 21.0", "22:30 18.0"],
+            "min_temp": 20.0,
+            "max_temp": 28.0,
+            "posmin": 1034,
+            "posmax": 24600,
+            "posmargin": 50,
+            "speed": 500000,
+            "lograte": 10,
+            "updaterate": 15,
+            "updir": 1,
+            "i2c_bus": 0,
+            "pigpio_addr": "host.docker.internal",
+            "pigpio_port": 8889,
+            "loglevel": "WARNING"
+          }
+        }
+      ]
+    }
+  ]
+```
+
+With that configuration:
+
+1. The add-on writes the desired image references into the exported client root.
+2. The client pulls those image tags on each reconciliation run.
+3. If a pulled tag resolves to a new image ID, the client recreates the
+   managed container automatically.
+
+Recommended update patterns:
+
+- Automatic channel tag: publish a new image to the same tag such as
+  `stable-arm64`. Clients pull it on the next reconciliation run and restart the
+  container automatically.
+- Controlled version tag: publish immutable tags such as `2026-03-15` or a git
+  SHA, then change the `image` field in the add-on config and restart the
+  add-on to roll that version out.
+- Hybrid: publish both immutable tags and a moving channel tag. Use the channel
+  tag for normal operation and switch to an immutable tag for rollback or
+  debugging.
+
 ## Operational notes
 
-- Client reconciliation runs on first boot and then every 15 minutes.
+- Client reconciliation starts after first-boot provisioning completes, then runs every 15 minutes.
+- Image sources are pulled on every reconciliation run.
 - Git and raw-Dockerfile sources are built locally on the client, not on Home Assistant.
 - Raw Dockerfile URL mode is intended for self-contained Dockerfiles like `Dockerfile.remote` that do not depend on extra local build context.
 - Existing newline-separated image lists continue to work.

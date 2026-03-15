@@ -382,6 +382,11 @@ main() {
   else
     log_warning "ssh.service could not be reloaded or restarted cleanly"
   fi
+  ha_pxe_client::stage_complete services "Runtime services are enabled and started"
+
+  ha_pxe_client::stage_start finalize "Recording first-boot completion marker and starting reconciliation"
+  touch "${MARKER_FILE}"
+
   if systemctl start ha-pxe-container-sync.service; then
     log_info "Triggered an initial ha-pxe-container-sync.service run"
   else
@@ -389,10 +394,6 @@ main() {
   fi
   systemctl start ha-pxe-container-sync.timer
   log_info "Started ha-pxe-container-sync.timer"
-  ha_pxe_client::stage_complete services "Runtime services are enabled and started"
-
-  ha_pxe_client::stage_start finalize "Recording first-boot completion marker"
-  touch "${MARKER_FILE}"
   ha_pxe_client::stage_complete finalize "First-boot provisioning completed successfully"
 }
 

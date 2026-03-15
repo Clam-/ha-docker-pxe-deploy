@@ -7,7 +7,7 @@ The add-on prepares Raspberry Pi network-boot clients by:
 - serving boot files over TFTP
 - serving a per-client root filesystem over NFS
 - creating a user on first boot
-- installing Docker on the client
+- installing Docker on the client during first boot before reconciliation starts
 - building or pulling configured Docker workloads on that client and reconciling them locally
 - relaying client first-boot and container reconciliation logs back into the add-on log
 
