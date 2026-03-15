@@ -8,7 +8,7 @@ The add-on prepares Raspberry Pi network-boot clients by:
 - serving a per-client root filesystem over NFS
 - creating a user on first boot
 - installing Docker on the client
-- starting a configured list of Docker images on that client
+- building or pulling configured Docker workloads on that client and reconciling them locally
 
 ## Install
 
@@ -23,7 +23,7 @@ The add-on prepares Raspberry Pi network-boot clients by:
 - DHCP or ProxyDHCP is not included in this add-on.
 - Raspberry Pi network boot still depends on the board model and bootloader
   state.
-- Container management is intentionally simple: each configured image is pulled
-  and started with Docker defaults.
+- Container management supports both simple shorthand entries and richer JSON
+  specs for remote builds, generated config files, and Docker run options.
 
 See [`raspi_pxe_docker_fleet/DOCS.md`](./raspi_pxe_docker_fleet/DOCS.md) for configuration examples and operational details.

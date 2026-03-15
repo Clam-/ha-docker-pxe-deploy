@@ -295,7 +295,7 @@ main() {
   apt-get install -y --no-install-recommends \
     -o Dpkg::Options::=--force-confdef \
     -o Dpkg::Options::=--force-confold \
-    ca-certificates docker.io jq
+    ca-certificates curl docker.io git jq
 
   ensure_group_memberships
   configure_ssh_keys

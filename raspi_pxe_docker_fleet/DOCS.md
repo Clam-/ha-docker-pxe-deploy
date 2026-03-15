@@ -7,7 +7,7 @@ Each configured client gets:
 - a dedicated NFS root filesystem
 - a first-boot user setup
 - Docker installed on first boot
-- a simple list of Docker images to run
+- local Docker workload reconciliation on the client
 
 ## Before you start
 
@@ -27,7 +27,6 @@ default_keyboard_layout: us
 default_locale: en_AU.UTF-8
 ssh_authorized_keys: |
   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN lee@example-macbook
-  ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDJ1i4WqQzK8V7o0xJ3mQeP1Xr1d9Yxk5oG4nM7lR0pA2uN6sB8wQ3nK6vM9cT1yP4wF7aL2mD8hQ9nS3gB5fL1zK0pR6tN8vQ2xC4mH7jL9sP1dF3gH5jK7mN9pQ2rT4vW6xY8zA0bC2dE4fG6hJ8kL0mN2pQ4rS6tU8vW0xY2z user@example
 clients:
   - serial: "cdc843d7"
     model: pi3
@@ -35,8 +34,51 @@ clients:
     image_arch: arm64
     rebuild: false
     containers: |
-      ghcr.io/home-assistant/home-assistant:stable
-      ghcr.io/linuxserver/watchtower:latest
+      [
+        {
+          "name": "janky-thermostat",
+          "source": {
+            "type": "git",
+            "url": "https://github.com/Clam-/ha-pxe-janky-thermostat.git",
+            "ref": "main",
+            "context": ".",
+            "dockerfile": "Dockerfile"
+          },
+          "env": {
+            "MQTT_BROKER": "mosquitto",
+            "MQTT_PORT": "1883",
+            "PIGPIO_ADDR": "pigpio",
+            "PIGPIO_PORT": "8888",
+            "I2C_BUS": "0"
+          },
+          "files": [
+            {
+              "container_path": "/config/config.json",
+              "format": "json",
+              "content": {
+                "mqtt_broker": "mosquitto",
+                "mqtt_port": 1883,
+                "mqtt_username": null,
+                "mqtt_password": null,
+                "schedule": ["06:00 21.0", "22:30 18.0"],
+                "min_temp": 20.0,
+                "max_temp": 28.0,
+                "posmin": 1034,
+                "posmax": 24600,
+                "posmargin": 50,
+                "speed": 500000,
+                "lograte": 10,
+                "updaterate": 15,
+                "updir": 1,
+                "i2c_bus": 0,
+                "pigpio_addr": "pigpio",
+                "pigpio_port": 8888,
+                "loglevel": "WARNING"
+              }
+            }
+          ]
+        }
+      ]
   - serial: "0x4f2c1a7b"
     model: pi4
     hostname: kitchen-pi.home.example
@@ -44,108 +86,143 @@ clients:
     rebuild: false
     containers: |
       docker.io/library/nginx:1.27-alpine
-      ghcr.io/example/sensor-agent:latest
+      https://github.com/Clam-/ha-pxe-janky-thermostat.git#main
 ```
 
 ## Field reference
 
 - `log_level`: `error`, `warn`, `info`, or `debug`.
-  `debug` adds verbose provisioning logs and TFTP request logs.
-- `server_ip`: Optional override for the IP address clients should use for TFTP
-  and NFS. Leave it blank to auto-detect.
+- `server_ip`: Optional override for the IP address clients should use for TFTP and NFS.
 - `default_username`: User created on each Raspberry Pi at first boot.
 - `default_password`: Optional password for that user.
-- `default_timezone`: Optional IANA timezone name to apply on first boot, such
-  as `Australia/Melbourne` or `America/New_York`. Leave blank to keep the image
-  default. Full list: `https://data.iana.org/time-zones/tzdb-2025a/zone1970.tab`
-- `default_keyboard_layout`: Optional XKB keyboard layout code to apply on
-  first boot, such as `gb`, `us`, or `de`. Leave blank to keep the image
-  default. Layout list: `https://sources.debian.org/src/xkeyboard-config/2.42-1/rules/base.lst/`
-- `default_locale`: Optional locale name to apply on first boot, such as
-  `en_AU.UTF-8`, `en_US.UTF-8`, or `de_DE.UTF-8`. Leave blank to keep the image
-  default. Locale list: `https://sources.debian.org/src/glibc/2.31-11/localedata/SUPPORTED/`
+- `default_timezone`: Optional IANA timezone name to apply on first boot.
+- `default_keyboard_layout`: Optional XKB keyboard layout code to apply on first boot.
+- `default_locale`: Optional locale name to apply on first boot.
 - `ssh_authorized_keys`: Optional newline-separated OpenSSH public keys.
-  Each key must be the full line, including key type, base64 payload, and
-  optional comment.
 - `clients`: List of Raspberry Pi clients to provision.
 
 Client fields:
 
-- `serial`: Raspberry Pi serial number. Hex strings with or without a `0x`
-  prefix are accepted.
-- `model`: One of `pi0`, `pi1`, `pi2`, `pi3`, `pi4`, `pi5`, `400`, `500`,
-  `cm3`, `cm4`, `cm5`, or `zero2w`.
-- `hostname`: Hostname written into the client root filesystem. Short hostnames
-  and dotted names are accepted.
-- `image_arch`: `auto`, `armhf`, or `arm64`. `auto` maps older boards to
-  `armhf` and newer boards to `arm64`.
-- `rebuild`: If `true`, the client boot and root exports are recreated from a
-  fresh Raspberry Pi OS Lite image on the next start.
-- `containers`: Newline-separated Docker image references. Each line should be
-  a normal image string such as `ghcr.io/home-assistant/home-assistant:stable`
-  or `docker.io/library/nginx:1.27-alpine`.
+- `serial`: Raspberry Pi serial number. Hex strings with or without a `0x` prefix are accepted.
+- `model`: One of `pi0`, `pi1`, `pi2`, `pi3`, `pi4`, `pi5`, `400`, `500`, `cm3`, `cm4`, `cm5`, or `zero2w`.
+- `hostname`: Hostname written into the client root filesystem.
+- `image_arch`: `auto`, `armhf`, or `arm64`.
+- `rebuild`: If `true`, the client boot and root exports are recreated from a fresh Raspberry Pi OS Lite image on the next start.
+- `containers`: Either newline-separated image refs and remote source URLs, or a JSON array of container spec objects.
 
-## Common examples
+## `containers` shorthand mode
 
-Example `ssh_authorized_keys` value:
+When `containers` is plain text instead of JSON, each non-empty line becomes one deployment. These shorthands are supported:
 
-```yaml
-ssh_authorized_keys: |
-  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN lee@example-macbook
-```
+- Registry image: `docker.io/library/nginx:1.27-alpine`
+- Git build: `https://github.com/owner/repo.git#main`
+- Git build with subdirectory context: `https://github.com/owner/repo.git#main:subdir`
+- Raw Dockerfile URL: `https://raw.githubusercontent.com/owner/repo/main/Dockerfile.remote`
 
-Example `containers` value:
+Shorthand deployments use Docker defaults: `restart: unless-stopped`, no extra mounts, no extra env vars, and no generated config files.
+
+## JSON container spec
+
+Use a JSON array when the container needs runtime configuration.
+
+Top-level container fields:
+
+- `name`: Recommended. Must be unique per client.
+- `source`: String shorthand or an object. If omitted, `image` is treated as a pulled registry image.
+- `image`: Optional output tag for build-based sources. For pulled images, this is the registry image ref.
+- `restart`: Docker restart policy. Defaults to `unless-stopped`.
+- `network_mode`: Optional Docker network mode such as `host`.
+- `privileged`: Optional boolean.
+- `workdir`: Optional working directory inside the container.
+- `env`: Object of environment variables.
+- `labels`: Object of Docker labels.
+- `devices`: Array of Docker `--device` strings.
+- `extra_hosts`: Array of Docker `--add-host` strings.
+- `ports`: Array of Docker port mappings. Each entry can be a string like `8080:80` or an object with `host`, `container`, and optional `protocol`.
+- `volumes`: Array of Docker bind mount strings, or objects with `source`, `target`, and optional `read_only`.
+- `command`: Optional string or array appended after the image name.
+- `files`: Array of generated files to materialize on the client and bind-mount into the container.
+
+`source` object fields:
+
+- `type`: `image`, `git`, or `dockerfile_url`.
+- `ref`: For `image`, the registry image reference. For `git`, the branch, tag, or commit to check out. Defaults to `main`.
+- `url`: Required for `git` and `dockerfile_url`.
+- `context`: For `git`, the relative build context inside the checked-out repo. Defaults to `.`.
+- `dockerfile`: Relative Dockerfile path. Defaults to `Dockerfile`.
+- `build_args`: Optional object of `docker build --build-arg` values.
+
+`files` entry fields:
+
+- `container_path`: Absolute path inside the container where the generated file will be mounted.
+- `content`: The file body. Strings are written as text. Objects and arrays can be emitted as JSON.
+- `format`: `text` or `json`. Defaults to `json` for object/array content and `text` for strings.
+- `mode`: File mode string such as `0644`.
+- `read_only`: Whether the generated mount should be `:ro`. Defaults to `true`.
+
+## Thermostat example
+
+The `ha-pxe-janky-thermostat` repo can be deployed with a Git source and a generated JSON config file:
 
 ```yaml
 containers: |
-  ghcr.io/home-assistant/home-assistant:stable
-  ghcr.io/linuxserver/watchtower:latest
-  docker.io/library/busybox:1.36
+  [
+    {
+      "name": "janky-thermostat",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/Clam-/ha-pxe-janky-thermostat.git",
+        "ref": "main",
+        "context": ".",
+        "dockerfile": "Dockerfile"
+      },
+      "env": {
+        "MQTT_BROKER": "mosquitto",
+        "PIGPIO_ADDR": "pigpio"
+      },
+      "files": [
+        {
+          "container_path": "/config/config.json",
+          "format": "json",
+          "content": {
+            "mqtt_broker": "mosquitto",
+            "mqtt_port": 1883,
+            "schedule": ["06:00 21.0", "22:30 18.0"],
+            "min_temp": 20.0,
+            "max_temp": 28.0,
+            "posmin": 1034,
+            "posmax": 24600,
+            "posmargin": 50,
+            "speed": 500000,
+            "lograte": 10,
+            "updaterate": 15,
+            "updir": 1,
+            "i2c_bus": 0,
+            "pigpio_addr": "pigpio",
+            "pigpio_port": 8888,
+            "loglevel": "WARNING"
+          }
+        }
+      ]
+    }
+  ]
 ```
 
-Example minimal single-client configuration:
+That causes the Raspberry Pi client to:
 
-```yaml
-log_level: info
-server_ip: ""
-default_username: pi
-default_password: ""
-default_timezone: ""
-default_keyboard_layout: ""
-default_locale: ""
-ssh_authorized_keys: |
-  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN lee@example-macbook
-clients:
-  - serial: "cdc843d7"
-    model: pi3
-    hostname: janky
-    image_arch: arm64
-```
-
-## DHCP requirement
-
-Your network must tell Raspberry Pi boot clients to use the Home Assistant host
-for TFTP. At minimum you usually need:
-
-- next-server / option 66: the add-on `server_ip`
-- boot file / option 67: the Raspberry Pi firmware entrypoint for your board
-
-If your main router cannot do this, use a separate DHCP or ProxyDHCP service on
-the network.
+1. Clone or update the Git repo locally.
+2. Build the image locally on the Pi.
+3. Write the JSON config file under its managed state directory.
+4. Bind-mount that file to `/config/config.json`.
+5. Recreate the container when the repo, build args, or runtime spec changes.
 
 ## Operational notes
 
-- `rebuild: true` replaces the exported boot and root trees for that client.
-- Client container management is intentionally simple. Each configured image is
-  pulled and started with Docker defaults.
-- The client root filesystem is stored under `/data`, so client state survives
-  add-on restarts.
-- The add-on masks Raspberry Pi OS stock interactive first-boot services such
-  as `userconfig.service` and `systemd-firstboot.service` so they do not open
-  local setup dialogs before the add-on bootstrap completes.
-- Raspberry Pi 2 v1.2, Pi 3, and CM3-class network boot first request
-  `/bootcode.bin` from the TFTP root, then typically probe `/bootsig.bin`.
-  The add-on only publishes root-level `bootcode.bin` for those legacy models.
-- Raspberry Pi 4, 400, CM4, Pi 5, 500, and CM5 use the EEPROM bootloader
-  instead of `bootcode.bin`. Those models should fetch `start4.elf` or
-  `start.elf` from the per-client prefixed directory.
+- Client reconciliation runs on first boot and then every 15 minutes.
+- Git and raw-Dockerfile sources are built locally on the client, not on Home Assistant.
+- Raw Dockerfile URL mode is intended for self-contained Dockerfiles like `Dockerfile.remote` that do not depend on extra local build context.
+- Existing newline-separated image lists continue to work.
+- If two deployments would infer the same `name`, set explicit unique names in the JSON spec.
+- The client root filesystem is stored under `/data`, so client state survives add-on restarts.
+- Raspberry Pi 2 v1.2, Pi 3, and CM3-class network boot first request `/bootcode.bin` from the TFTP root, then typically probe `/bootsig.bin`.
+- Raspberry Pi 4, 400, CM4, Pi 5, 500, and CM5 use the EEPROM bootloader instead of `bootcode.bin`.

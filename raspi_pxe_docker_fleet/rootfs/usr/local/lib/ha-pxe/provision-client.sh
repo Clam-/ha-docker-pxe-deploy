@@ -86,7 +86,7 @@ write_bootstrap_files() {
   local root_dir="${1}"
   local serial="${2}"
   local hostname="${3}"
-  local containers_raw="${4}"
+  local containers_json="${4}"
   local username password keys groups group authorized_keys_path
   local default_timezone default_keyboard_layout default_locale
 
@@ -136,7 +136,7 @@ EOF
     : > "${authorized_keys_path}"
   fi
 
-  printf '%s\n' "${containers_raw}" | sed -e 's/\r$//' -e '/^[[:space:]]*$/d' > "${root_dir}/etc/ha-pxe/containers.txt"
+  printf '%s\n' "${containers_json}" > "${root_dir}/etc/ha-pxe/containers.json"
 
   printf '%s\n' "${hostname}" > "${root_dir}/etc/hostname"
 
@@ -152,7 +152,7 @@ EOF
 main() {
   local client_json="${1}"
   local server_ip="${2}"
-  local serial model hostname arch_override arch rebuild containers_raw
+  local serial model hostname arch_override arch rebuild containers_raw containers_json
   local short_serial boot_dir root_dir state_file image_url image_path
   local existing_arch existing_model
 
@@ -163,6 +163,7 @@ main() {
   arch_override="$(jq -r '.image_arch // "auto"' <<<"${client_json}")"
   rebuild="$(jq -r '.rebuild // false' <<<"${client_json}")"
   containers_raw="$(jq -r '.containers // ""' <<<"${client_json}")"
+  containers_json="$(ha_pxe::container_specs_json "${containers_raw}")"
 
   if ! ha_pxe::validate_model "${model}"; then
     ha_pxe::log_error "Unsupported model '${model}' for client ${serial}"
@@ -212,7 +213,7 @@ main() {
   rewrite_fstab "${root_dir}" "${server_ip}" "${boot_dir}"
   ha_pxe::log_info "Injecting first-boot bootstrap for ${serial}"
   disable_stock_firstboot_services "${root_dir}"
-  write_bootstrap_files "${root_dir}" "${serial}" "${hostname}" "${containers_raw}"
+  write_bootstrap_files "${root_dir}" "${serial}" "${hostname}" "${containers_json}"
   ha_pxe::log_info "Registering NFS exports for ${serial}"
   ha_pxe::append_exports "${boot_dir}" "${root_dir}"
   ha_pxe::log_info "Publishing shared TFTP firmware for ${serial}"

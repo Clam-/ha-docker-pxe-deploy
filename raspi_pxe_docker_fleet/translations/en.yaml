@@ -34,4 +34,4 @@ configuration:
     description: Optional newline-separated public keys for the created user.
   clients:
     name: Raspberry Pi clients
-    description: Serial, model, hostname, optional image override, and newline-separated Docker image list per client.
+    description: Serial, model, hostname, optional image override, and per-client Docker workload definitions. The containers field supports simple line-based shorthands or a JSON array of detailed specs.

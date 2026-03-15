@@ -141,6 +141,287 @@ ha_pxe::config_json() {
   jq -c "${filter} // ${default_json}" "${HA_PXE_OPTIONS_FILE}"
 }
 
+ha_pxe::container_specs_json() {
+  local raw="${1:-}"
+  local normalized
+
+  if ! normalized="$(
+    jq -Rn -cS --arg raw "${raw}" '
+      def slug:
+        ascii_downcase
+        | gsub("[^a-z0-9_.-]+"; "-")
+        | gsub("^-+"; "")
+        | gsub("-+$"; "")
+        | if . == "" then "container" else . end;
+
+      def normalize_key_values($value; $field):
+        if $value == null then
+          {}
+        elif ($value | type) != "object" then
+          error("\($field) must be an object")
+        else
+          $value
+          | with_entries(select(.value != null) | .value |= tostring)
+        end;
+
+      def normalize_string_array($value; $field):
+        if $value == null then
+          []
+        elif ($value | type) != "array" then
+          error("\($field) must be an array")
+        elif ([ $value[] | type == "string" ] | all) then
+          $value
+        else
+          error("\($field) entries must be strings")
+        end;
+
+      def normalize_command($value):
+        if $value == null then
+          []
+        elif ($value | type) == "array" then
+          [ $value[] | tostring ]
+        elif ($value | type) == "string" then
+          [ $value ]
+        else
+          error("command must be a string or array")
+        end;
+
+      def normalize_volumes($value):
+        if $value == null then
+          []
+        elif ($value | type) != "array" then
+          error("volumes must be an array")
+        else
+          [
+            $value[]
+            | if type == "string" then
+                .
+              elif type == "object" then
+                (.source // .src // error("volume entry requires source")) as $source
+                | (.target // .dst // .destination // error("volume entry requires target")) as $target
+                | ($source + ":" + $target + (if (.read_only // false) then ":ro" else "" end))
+              else
+                error("volume entries must be strings or objects")
+              end
+          ]
+        end;
+
+      def normalize_ports($value):
+        if $value == null then
+          []
+        elif ($value | type) != "array" then
+          error("ports must be an array")
+        else
+          [
+            $value[]
+            | if type == "string" then
+                .
+              elif type == "object" then
+                (.container // .target // error("port entry requires container")) as $container
+                | (.host // .published // error("port entry requires host")) as $host
+                | (.protocol // "tcp" | tostring) as $protocol
+                | (($host | tostring) + ":" + ($container | tostring) + (if $protocol == "tcp" then "" else "/" + $protocol end))
+              else
+                error("port entries must be strings or objects")
+              end
+          ]
+        end;
+
+      def normalize_files($value):
+        if $value == null then
+          []
+        elif ($value | type) != "array" then
+          error("files must be an array")
+        else
+          [
+            $value[]
+            | if type != "object" then
+                error("file entries must be objects")
+              else
+                .
+              end
+            | {
+                container_path: (.container_path // .path // error("file entry requires container_path")),
+                content: (.content // ""),
+                format: (.format // (if ((.content // "") | type) == "string" then "text" else "json" end)),
+                mode: ((.mode // "0644") | tostring),
+                read_only: (.read_only // true)
+              }
+            | if (.container_path | type != "string" or (startswith("/") | not)) then
+                error("file container_path must be absolute")
+              else
+                .
+              end
+          ]
+        end;
+
+      def parse_source_string($raw_source):
+        if ($raw_source | test("^https?://.+\\.git(?:#.*)?$")) or ($raw_source | test("^git@.+:.+\\.git(?:#.*)?$")) then
+          ($raw_source | capture("^(?<url>.+?\\.git)(?:#(?<fragment>.*))?$")) as $match
+          | (($match.fragment // "") | split(":")) as $parts
+          | {
+              type: "git",
+              url: $match.url,
+              ref: (if ($parts | length) > 0 and ($parts[0] != "") then $parts[0] else "main" end),
+              context: (if ($parts | length) > 1 and ($parts[1] != "") then $parts[1] else "." end),
+              dockerfile: "Dockerfile",
+              build_args: {}
+            }
+        elif ($raw_source | test("^https?://")) then
+          {
+            type: "dockerfile_url",
+            url: $raw_source,
+            dockerfile: "Dockerfile",
+            build_args: {}
+          }
+        else
+          {
+            type: "image",
+            ref: $raw_source
+          }
+        end;
+
+      def normalize_source($value; $image_override):
+        if $value == null and (($image_override // "") != "") then
+          { type: "image", ref: $image_override }
+        elif ($value | type) == "string" then
+          parse_source_string($value)
+        elif ($value | type) == "object" then
+          if ($value.type // "") == "image" then
+            {
+              type: "image",
+              ref: ($value.ref // $value.image // $image_override // error("image source requires ref"))
+            }
+          elif ($value.type // "") == "git" then
+            {
+              type: "git",
+              url: ($value.url // error("git source requires url")),
+              ref: ($value.ref // "main"),
+              context: ($value.context // "."),
+              dockerfile: ($value.dockerfile // "Dockerfile"),
+              build_args: normalize_key_values(($value.build_args // {}); "source.build_args")
+            }
+          elif ($value.type // "") == "dockerfile_url" then
+            {
+              type: "dockerfile_url",
+              url: ($value.url // error("dockerfile_url source requires url")),
+              dockerfile: ($value.dockerfile // "Dockerfile"),
+              build_args: normalize_key_values(($value.build_args // {}); "source.build_args")
+            }
+          else
+            error("unsupported source.type")
+          end
+        else
+          error("container source must be a string or object")
+        end;
+
+      def infer_name($source):
+        (
+          if $source.type == "image" then
+            $source.ref
+            | split("/")
+            | last
+            | split("@")[0]
+            | split(":")[0]
+          elif $source.type == "git" then
+            $source.url
+            | sub("#.*$"; "")
+            | split("/")
+            | last
+            | sub("\\.git$"; "")
+          else
+            $source.url
+            | split("?")[0]
+            | split("#")[0]
+            | split("/")
+            | last
+            | sub("\\.[A-Za-z0-9._-]+$"; "")
+          end
+        )
+        | slug;
+
+      def default_image($source; $name):
+        if $source.type == "image" then
+          $source.ref
+        else
+          "ha-pxe/" + $name + ":managed"
+        end;
+
+      def normalize_item:
+        if type == "string" then
+          { source: . }
+        elif type == "object" then
+          .
+        else
+          error("container entries must be strings or objects")
+        end
+        | . as $item
+        | normalize_source(($item.source // null); ($item.image // null)) as $source
+        | (($item.name // infer_name($source)) | tostring | slug) as $name
+        | {
+            name: $name,
+            image: (
+              ($item.image // null)
+              | if . == null or . == "" then default_image($source; $name) else . end
+            ),
+            source: $source,
+            restart: (($item.restart // "unless-stopped") | tostring),
+            network_mode: (($item.network_mode // "") | tostring),
+            privileged: ($item.privileged // false),
+            workdir: (($item.workdir // "") | tostring),
+            env: normalize_key_values(($item.env // {}); "env"),
+            labels: normalize_key_values(($item.labels // {}); "labels"),
+            files: normalize_files($item.files // []),
+            volumes: normalize_volumes($item.volumes // []),
+            ports: normalize_ports($item.ports // []),
+            devices: normalize_string_array(($item.devices // []); "devices"),
+            extra_hosts: normalize_string_array(($item.extra_hosts // []); "extra_hosts"),
+            command: normalize_command($item.command // null)
+          }
+        | if .source.type == "image" then
+            .image = .source.ref
+          else
+            .
+          end;
+
+      def input_entries:
+        ($raw | gsub("[[:space:]]"; "")) as $compact
+        | if $compact == "" then
+            []
+          elif ($compact | startswith("[")) or ($compact | startswith("{")) then
+            ($raw | fromjson) as $decoded
+            | if ($decoded | type) == "array" then
+                $decoded
+              elif ($decoded | type) == "object" then
+                [$decoded]
+              else
+                error("containers JSON must decode to an object or array")
+              end
+          else
+            $raw
+            | split("\n")
+            | map(sub("\r$"; ""))
+            | map(gsub("[[:space:]]+#.*$"; ""))
+            | map(gsub("^[[:space:]]+|[[:space:]]+$"; ""))
+            | map(select(length > 0))
+          end;
+
+      input_entries
+      | map(normalize_item) as $items
+      | if ([ $items[].name ] | length) == ([ $items[].name ] | unique | length) then
+          $items
+        else
+          error("container names must be unique; set an explicit name when sources would infer the same one")
+        end
+    ' 2>/dev/null
+  )"; then
+    ha_pxe::log_error "Invalid containers configuration. Use newline-separated image or source URLs, or a JSON array of container specs."
+    return 1
+  fi
+
+  printf '%s\n' "${normalized}"
+}
+
 ha_pxe::format_mib() {
   local bytes="${1:-0}"
   printf '%d' "$(((bytes + 1048575) / 1048576))"
@@ -265,7 +546,7 @@ ha_pxe::reset_runtime_state() {
 }
 
 ha_pxe::validate_config() {
-  local username password keys clients_json
+  local username password keys clients_json client_json client_serial containers_raw
 
   username="$(ha_pxe::config_string '.default_username')"
   password="$(ha_pxe::config_string '.default_password')"
@@ -282,6 +563,16 @@ ha_pxe::validate_config() {
       ha_pxe::log_error "Client serial numbers must be unique"
       return 1
     fi
+
+    while IFS= read -r client_json; do
+      [[ -n "${client_json}" ]] || continue
+      client_serial="$(jq -r '.serial' <<<"${client_json}")"
+      containers_raw="$(jq -r '.containers // ""' <<<"${client_json}")"
+      if ! ha_pxe::container_specs_json "${containers_raw}" >/dev/null; then
+        ha_pxe::log_error "Client ${client_serial} has an invalid containers configuration"
+        return 1
+      fi
+    done < <(jq -c '.[]?' <<<"${clients_json}")
   fi
 
   ha_pxe::log_info "Default client user is ${username}"
