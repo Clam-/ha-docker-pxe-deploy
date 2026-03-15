@@ -15,6 +15,8 @@ HA_PXE_OS_PAGE="https://www.raspberrypi.com/software/operating-systems/"
 HA_PXE_BG_PIDS=()
 HA_PXE_LOG_LEVEL="info"
 HA_PXE_MQTT_ENV_STATUS_LOGGED="false"
+HA_PXE_CLIENT_LOG_PORT="8099"
+HA_PXE_CLIENT_LOG_PATH="/client-log"
 
 ha_pxe::log_level_rank() {
   case "${1}" in
@@ -1097,6 +1099,28 @@ Required DHCP concepts:
 
 This add-on does not run DHCP or ProxyDHCP.
 EOF
+}
+
+ha_pxe::start_client_log_transport() {
+  local port="${HA_PXE_CLIENT_LOG_PORT}"
+  local pid status=0
+
+  ha_pxe::log_debug "Starting client log transport listener on TCP ${port}${HA_PXE_CLIENT_LOG_PATH}"
+  socat "TCP-LISTEN:${port},reuseaddr,fork" EXEC:/usr/local/lib/ha-pxe/client-log-server.sh &
+  pid="$!"
+  sleep 1
+
+  if ! kill -0 "${pid}" 2>/dev/null; then
+    wait "${pid}" || status=$?
+    if (( status == 0 )); then
+      status=1
+    fi
+    ha_pxe::log_error "Client log transport failed to start on TCP ${port}${HA_PXE_CLIENT_LOG_PATH}"
+    return "${status}"
+  fi
+
+  HA_PXE_BG_PIDS+=("${pid}")
+  ha_pxe::log_info "Client log transport is active on TCP ${port}${HA_PXE_CLIENT_LOG_PATH}"
 }
 
 ha_pxe::start_nfs_server() {

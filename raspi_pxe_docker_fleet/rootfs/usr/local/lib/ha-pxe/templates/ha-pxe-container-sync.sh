@@ -3,6 +3,10 @@ set -Eeuo pipefail
 
 source /etc/ha-pxe/bootstrap.env
 
+HA_PXE_CLIENT_LOG_PREFIX="ha-pxe-container-sync"
+HA_PXE_CLIENT_LOG_SOURCE="container-sync"
+source /usr/local/lib/ha-pxe/client-log.sh
+
 STATE_ROOT="/var/lib/ha-pxe/containers"
 DESIRED_FILE="/etc/ha-pxe/containers.json"
 
@@ -11,17 +15,24 @@ HA_PXE_BUILD_DOCKERFILE=""
 HA_PXE_BUILD_FINGERPRINT=""
 HA_PXE_MATERIALIZED_FILE_MOUNTS=()
 
+trap 'ha_pxe_client::err_trap "$?" "${LINENO}"' ERR
+
 log_info() {
-  printf '[ha-pxe-container-sync] %s\n' "$*" >&2
+  ha_pxe_client::log info "${HA_PXE_CLIENT_LOG_CURRENT_STAGE:-sync}" in_progress "$*"
+}
+
+log_warning() {
+  ha_pxe_client::log warn "${HA_PXE_CLIENT_LOG_CURRENT_STAGE:-sync}" warning "$*"
 }
 
 log_error() {
-  printf '[ha-pxe-container-sync] %s\n' "$*" >&2
+  ha_pxe_client::log error "${HA_PXE_CLIENT_LOG_CURRENT_STAGE:-sync}" error "$*"
 }
 
 slug() {
-  local value="${1,,}"
+  local value="${1}"
 
+  value="$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')"
   value="$(sed -E 's/[^a-z0-9_.-]+/-/g; s/^-+//; s/-+$//' <<<"${value}")"
   if [[ -z "${value}" ]]; then
     value="container"
@@ -57,7 +68,9 @@ spec_hash() {
 }
 
 ensure_docker_running() {
+  log_info "Starting docker.service before reconciling managed containers"
   systemctl start docker.service
+  log_info "docker.service is running"
 }
 
 sort_container_specs_json() {
@@ -144,13 +157,16 @@ prepare_git_build() {
   dockerfile_rel="$(jq -r '.source.dockerfile' <<<"${spec}")"
 
   mkdir -p "${state_dir}/source"
+  log_info "Preparing git build context from ${source_url} ref=${source_ref} context=${context_rel} dockerfile=${dockerfile_rel}"
 
   if [[ ! -d "${repo_dir}/.git" ]]; then
+    log_info "Cloning ${source_url} into the managed build cache"
     rm -rf "${repo_dir}"
     git clone --no-checkout "${source_url}" "${repo_dir}"
   fi
 
   git -C "${repo_dir}" remote set-url origin "${source_url}"
+  log_info "Fetching latest refs for ${source_url}"
   git -C "${repo_dir}" fetch --tags --prune origin
   git -C "${repo_dir}" fetch origin "${source_ref}" || true
 
@@ -165,6 +181,7 @@ prepare_git_build() {
   git -C "${repo_dir}" reset --hard "${target}"
   git -C "${repo_dir}" clean -fdx
   revision="$(git -C "${repo_dir}" rev-parse HEAD)"
+  log_info "Checked out revision ${revision} for ${source_url}"
 
   HA_PXE_BUILD_CONTEXT="$(resolve_relative_path "${repo_dir}" "${context_rel}" "git build context")"
   HA_PXE_BUILD_DOCKERFILE="$(resolve_relative_path "${repo_dir}" "${dockerfile_rel}" "git Dockerfile path")"
@@ -203,6 +220,7 @@ prepare_remote_dockerfile_build() {
   HA_PXE_BUILD_DOCKERFILE="$(resolve_relative_path "${source_dir}" "${dockerfile_rel}" "remote Dockerfile path")"
 
   mkdir -p "${HA_PXE_BUILD_CONTEXT}" "$(dirname "${HA_PXE_BUILD_DOCKERFILE}")"
+  log_info "Downloading remote Dockerfile from ${source_url} into ${HA_PXE_BUILD_DOCKERFILE}"
   curl -fsSL "${source_url}" -o "${HA_PXE_BUILD_DOCKERFILE}.tmp"
   mv "${HA_PXE_BUILD_DOCKERFILE}.tmp" "${HA_PXE_BUILD_DOCKERFILE}"
 
@@ -245,6 +263,9 @@ build_image_if_needed() {
 
     log_info "Building ${image_name}"
     "${build_cmd[@]}" >&2
+    log_info "Built ${image_name} with updated fingerprint ${HA_PXE_BUILD_FINGERPRINT}"
+  else
+    log_info "Reusing existing image ${image_name}; build fingerprint already matches"
   fi
 
   docker image inspect --format '{{.Id}}' "${image_name}"
@@ -263,6 +284,7 @@ ensure_desired_image() {
     image)
       log_info "Pulling ${image_name}"
       docker pull "${image_name}" >/dev/null
+      log_info "Pulled ${image_name} successfully"
       docker image inspect --format '{{.Id}}' "${image_name}"
       ;;
     git)
@@ -290,6 +312,7 @@ materialize_files() {
 
   rm -rf "${files_dir}"
   mkdir -p "${files_dir}"
+  log_info "Materializing generated container files into ${files_dir}"
 
   while IFS= read -r file_json; do
     [[ -n "${file_json}" ]] || continue
@@ -323,7 +346,10 @@ materialize_files() {
     fi
 
     HA_PXE_MATERIALIZED_FILE_MOUNTS+=("${volume}")
+    log_info "Prepared generated file mount ${container_path} (${mode})"
   done < <(jq -c '.files[]?' <<<"${spec}")
+
+  log_info "Materialized ${#HA_PXE_MATERIALIZED_FILE_MOUNTS[@]} generated file mount(s)"
 }
 
 run_container() {
@@ -404,27 +430,35 @@ run_container() {
     run_cmd+=("${item_json}")
   done < <(jq -r '.command[]?' <<<"${spec}")
 
-  log_info "Starting ${container_name}"
+  log_info "Starting ${container_name} from ${image_name}"
   "${run_cmd[@]}"
 }
 
 reconcile_container() {
   local spec="${1}"
   local key container_name state_dir desired_image_id desired_spec_hash current_spec_hash current_image_id
+  local display_name stage_name current_state
 
   key="$(spec_key "${spec}")"
   container_name="$(container_name_for_spec "${spec}")"
   state_dir="$(container_dir_for_spec "${spec}")"
+  display_name="$(jq -r '.name' <<<"${spec}")"
+  stage_name="reconcile-$(slug "${display_name}")"
 
+  ha_pxe_client::stage_start "${stage_name}" "Reconciling container ${display_name}"
   mkdir -p "${state_dir}"
+  log_info "State directory for ${display_name} is ${state_dir}"
   desired_image_id="$(ensure_desired_image "${spec}" "${key}" "${state_dir}")"
   materialize_files "${spec}" "${state_dir}"
   desired_spec_hash="$(spec_hash "${spec}")"
   current_spec_hash="$(docker inspect --format '{{ index .Config.Labels "io.ha_pxe.spec_hash" }}' "${container_name}" 2>/dev/null || true)"
   current_image_id="$(docker inspect --format '{{.Image}}' "${container_name}" 2>/dev/null || true)"
+  current_state="$(docker inspect --format '{{.State.Status}}' "${container_name}" 2>/dev/null || true)"
 
   if [[ -z "${current_image_id}" ]]; then
+    log_info "Container ${container_name} does not exist yet; creating it"
     run_container "${spec}" "${key}" "${container_name}" "${desired_spec_hash}"
+    ha_pxe_client::stage_complete "${stage_name}" "Created container ${display_name}"
     return 0
   fi
 
@@ -432,10 +466,17 @@ reconcile_container() {
     log_info "Recreating ${container_name}"
     docker rm -f "${container_name}" >/dev/null
     run_container "${spec}" "${key}" "${container_name}" "${desired_spec_hash}"
+    ha_pxe_client::stage_complete "${stage_name}" "Recreated container ${display_name} with updated image or spec"
     return 0
   fi
 
+  if [[ "${current_state}" != "running" ]]; then
+    log_info "Container ${container_name} exists but is not running; attempting to start it"
+  else
+    log_info "Container ${container_name} is already up to date"
+  fi
   docker start "${container_name}" >/dev/null 2>&1 || true
+  ha_pxe_client::stage_complete "${stage_name}" "Container ${display_name} matches the desired state"
 }
 
 cleanup_stale_containers() {
@@ -468,19 +509,24 @@ cleanup_stale_state_dirs() {
       continue
     fi
 
+    log_info "Removing stale state directory ${state_dir}"
     rm -rf "${state_dir}"
   done < <(find "${STATE_ROOT}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
 }
 
 main() {
-  local spec key desired_json
+  local spec key desired_json desired_count
   local had_error=false
   declare -A desired_keys=()
 
+  ha_pxe_client::stage_start preflight "Starting managed container reconciliation for ${PXE_HOSTNAME} (${PXE_SERIAL})"
   if ! command -v docker >/dev/null 2>&1; then
+    ha_pxe_client::stage_skip preflight "Docker is not installed on the client yet; skipping container reconciliation"
     exit 0
   fi
+  ha_pxe_client::stage_complete preflight "Docker CLI is available"
 
+  ha_pxe_client::stage_start validate "Validating the desired container specification file"
   if ! jq -e 'type == "array"' "${DESIRED_FILE}" >/dev/null 2>&1; then
     log_error "Container spec file is invalid: ${DESIRED_FILE}"
     exit 1
@@ -489,9 +535,13 @@ main() {
   if ! desired_json="$(sort_container_specs_json "$(jq -cS '.' "${DESIRED_FILE}")")"; then
     exit 1
   fi
+  desired_count="$(jq -r 'length' <<<"${desired_json}")"
+  ha_pxe_client::stage_complete validate "Loaded ${desired_count} desired container definition(s)"
 
+  ha_pxe_client::stage_start docker "Ensuring the Docker daemon is available"
   ensure_docker_running
   mkdir -p "${STATE_ROOT}"
+  ha_pxe_client::stage_complete docker "Docker is ready and state directories exist"
 
   while IFS= read -r spec; do
     [[ -n "${spec}" ]] || continue
@@ -499,6 +549,7 @@ main() {
     desired_keys["${key}"]=1
   done < <(jq -c '.[]?' <<<"${desired_json}")
 
+  ha_pxe_client::stage_start reconcile "Reconciling each desired managed container"
   while IFS= read -r spec; do
     [[ -n "${spec}" ]] || continue
     if ! reconcile_container "${spec}"; then
@@ -506,13 +557,23 @@ main() {
       had_error=true
     fi
   done < <(jq -c '.[]?' <<<"${desired_json}")
+  if [[ "${had_error}" == "true" ]]; then
+    ha_pxe_client::stage_fail reconcile "One or more managed containers failed to reconcile"
+  else
+    ha_pxe_client::stage_complete reconcile "All managed containers were reconciled successfully"
+  fi
 
+  ha_pxe_client::stage_start cleanup "Removing stale managed containers and cached state"
   cleanup_stale_containers desired_keys
   cleanup_stale_state_dirs desired_keys
+  ha_pxe_client::stage_complete cleanup "Stale managed containers and state directories were cleaned up"
 
   if [[ "${had_error}" == "true" ]]; then
     exit 1
   fi
+
+  ha_pxe_client::stage_start summary "Finalizing container reconciliation"
+  ha_pxe_client::stage_complete summary "Managed container reconciliation completed successfully"
 }
 
 main "$@"

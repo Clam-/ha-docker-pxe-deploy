@@ -9,6 +9,7 @@ The add-on prepares Raspberry Pi network-boot clients by:
 - creating a user on first boot
 - installing Docker on the client
 - building or pulling configured Docker workloads on that client and reconciling them locally
+- relaying client first-boot and container reconciliation logs back into the add-on log
 
 ## Install
 
@@ -87,5 +88,8 @@ definition with:
   state.
 - Container management supports both simple shorthand entries and richer JSON
   specs for remote builds, generated config files, and Docker run options.
+- Provisioned clients automatically post first-boot and container-sync log
+  entries back to the add-on over TCP `8099` at `/client-log`. If you filter
+  traffic between the clients and the Home Assistant host, allow that path.
 
 See [`raspi_pxe_docker_fleet/DOCS.md`](./raspi_pxe_docker_fleet/DOCS.md) for configuration examples and operational details.

@@ -18,6 +18,7 @@ main() {
   server_ip="$(ha_pxe::resolve_server_ip)"
   export HA_PXE_SERVER_IP="${server_ip}"
 
+  ha_pxe::start_client_log_transport
   ha_pxe::log_info "Using ${server_ip} as the PXE/NFS endpoint"
   ha_pxe::write_dhcp_hints "${server_ip}"
 

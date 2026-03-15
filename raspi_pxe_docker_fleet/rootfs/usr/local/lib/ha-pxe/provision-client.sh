@@ -4,6 +4,29 @@ set -Eeuo pipefail
 source /usr/lib/bashio/bashio.sh
 source /usr/local/lib/ha-pxe/common.sh
 
+log_stage() {
+  local level="${1}"
+  local serial="${2}"
+  local stage="${3}"
+  local status="${4}"
+  shift 4
+
+  case "${level}" in
+    error)
+      ha_pxe::log_error "[client ${serial}] stage=${stage} status=${status} $*"
+      ;;
+    warn)
+      ha_pxe::log_warning "[client ${serial}] stage=${stage} status=${status} $*"
+      ;;
+    debug)
+      ha_pxe::log_debug "[client ${serial}] stage=${stage} status=${status} $*"
+      ;;
+    *)
+      ha_pxe::log_info "[client ${serial}] stage=${stage} status=${status} $*"
+      ;;
+  esac
+}
+
 rewrite_cmdline() {
   local boot_dir="${1}"
   local server_ip="${2}"
@@ -98,6 +121,7 @@ write_bootstrap_files() {
   default_locale="$(ha_pxe::config_string '.default_locale')"
 
   mkdir -p "${root_dir}/etc/ha-pxe"
+  mkdir -p "${root_dir}/usr/local/lib/ha-pxe"
   mkdir -p "${root_dir}/usr/local/sbin"
   mkdir -p "${root_dir}/etc/systemd/system/multi-user.target.wants"
   mkdir -p "${root_dir}/etc/systemd/system/timers.target.wants"
@@ -112,6 +136,7 @@ write_bootstrap_files() {
   install -m 0644 /usr/local/lib/ha-pxe/templates/ha-pxe-firstboot.service "${root_dir}/etc/systemd/system/ha-pxe-firstboot.service"
   install -m 0644 /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.service "${root_dir}/etc/systemd/system/ha-pxe-container-sync.service"
   install -m 0644 /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.timer "${root_dir}/etc/systemd/system/ha-pxe-container-sync.timer"
+  install -m 0644 /usr/local/lib/ha-pxe/templates/ha-pxe-client-log.sh "${root_dir}/usr/local/lib/ha-pxe/client-log.sh"
   install -m 0755 /usr/local/lib/ha-pxe/templates/ha-pxe-firstboot.sh "${root_dir}/usr/local/sbin/ha-pxe-firstboot"
   install -m 0755 /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.sh "${root_dir}/usr/local/sbin/ha-pxe-container-sync"
 
@@ -127,6 +152,9 @@ PXE_EXTRA_GROUPS=$(printf '%q' "${groups}")
 PXE_DEFAULT_TIMEZONE=$(printf '%q' "${default_timezone}")
 PXE_DEFAULT_KEYBOARD_LAYOUT=$(printf '%q' "${default_keyboard_layout}")
 PXE_DEFAULT_LOCALE=$(printf '%q' "${default_locale}")
+PXE_LOG_HOST=$(printf '%q' "${server_ip}")
+PXE_LOG_PORT=$(printf '%q' "${HA_PXE_CLIENT_LOG_PORT}")
+PXE_LOG_PATH=$(printf '%q' "${HA_PXE_CLIENT_LOG_PATH}")
 EOF
 
   authorized_keys_path="${root_dir}/etc/ha-pxe/authorized_keys"
@@ -153,7 +181,7 @@ main() {
   local client_json="${1}"
   local server_ip="${2}"
   local serial model hostname arch_override arch rebuild containers_raw containers_json
-  local short_serial boot_dir root_dir state_file image_url image_path
+  local short_serial boot_dir root_dir state_file image_url image_path container_count
   local existing_arch existing_model
 
   serial="$(ha_pxe::normalize_serial "$(jq -r '.serial' <<<"${client_json}")")"
@@ -164,6 +192,7 @@ main() {
   rebuild="$(jq -r '.rebuild // false' <<<"${client_json}")"
   containers_raw="$(jq -r '.containers // ""' <<<"${client_json}")"
   containers_json="$(ha_pxe::container_specs_json "${containers_raw}")"
+  container_count="$(jq -r 'length' <<<"${containers_json}")"
 
   if ! ha_pxe::validate_model "${model}"; then
     ha_pxe::log_error "Unsupported model '${model}' for client ${serial}"
@@ -172,7 +201,7 @@ main() {
 
   ha_pxe::warn_if_model_needs_manual_attention "${model}"
   arch="$(ha_pxe::image_arch_for_model "${model}" "${arch_override}")"
-  ha_pxe::log_info "Preparing client ${hostname} (${serial}) for model ${model} with image arch ${arch}"
+  log_stage info "${serial}" prepare started "Provisioning ${hostname} for model ${model} with image arch ${arch} and ${container_count} managed container(s)"
 
   boot_dir="${HA_PXE_EXPORTS_DIR}/${serial}/boot"
   root_dir="${HA_PXE_EXPORTS_DIR}/${serial}/root"
@@ -181,7 +210,7 @@ main() {
   mkdir -p "${boot_dir}" "${root_dir}"
 
   if [[ "${rebuild}" == "true" ]]; then
-    ha_pxe::log_warning "Rebuilding exports for ${serial}"
+    log_stage warn "${serial}" prepare in_progress "Rebuild requested; clearing exported boot/root trees and cached state"
     ha_pxe::clear_directory "${boot_dir}"
     ha_pxe::clear_directory "${root_dir}"
     rm -f "${state_file}"
@@ -200,28 +229,35 @@ main() {
   fi
 
   if [[ ! -f "${root_dir}/etc/os-release" || ! -f "${boot_dir}/cmdline.txt" ]]; then
+    log_stage info "${serial}" image started "Selecting, downloading, and unpacking a Raspberry Pi OS image"
     image_url="$(ha_pxe::latest_image_url "${arch}")"
     ha_pxe::log_info "Selected Raspberry Pi OS image ${image_url}"
     image_path="$(ha_pxe::download_image "${image_url}")"
     ha_pxe::log_info "Populating exports for ${serial} from ${image_path}"
     ha_pxe::populate_from_image "${image_path}" "${boot_dir}" "${root_dir}"
     ha_pxe::write_client_state "${state_file}" "${model}" "${arch}" "${image_url}"
+    log_stage info "${serial}" image completed "Exported boot and root filesystems from ${image_url##*/}"
+  else
+    log_stage info "${serial}" image skipped "Reusing existing exported boot/root trees"
   fi
 
-  ha_pxe::log_info "Writing PXE boot configuration for ${serial}"
+  log_stage info "${serial}" boot-config started "Writing kernel command line and fstab entries for network boot"
   rewrite_cmdline "${boot_dir}" "${server_ip}" "${root_dir}"
   rewrite_fstab "${root_dir}" "${server_ip}" "${boot_dir}"
-  ha_pxe::log_info "Injecting first-boot bootstrap for ${serial}"
+  log_stage info "${serial}" boot-config completed "PXE boot configuration updated"
+  log_stage info "${serial}" bootstrap started "Installing first-boot and container-sync bootstrap assets"
   disable_stock_firstboot_services "${root_dir}"
   write_bootstrap_files "${root_dir}" "${serial}" "${hostname}" "${containers_json}"
-  ha_pxe::log_info "Registering NFS exports for ${serial}"
+  log_stage info "${serial}" bootstrap completed "Bootstrap scripts, services, and transport settings installed"
+  log_stage info "${serial}" nfs started "Registering per-client NFS exports"
   ha_pxe::append_exports "${boot_dir}" "${root_dir}"
-  ha_pxe::log_info "Publishing shared TFTP firmware for ${serial}"
+  log_stage info "${serial}" nfs completed "Per-client NFS exports registered"
+  log_stage info "${serial}" tftp started "Publishing shared firmware and binding TFTP trees"
   ha_pxe::publish_root_tftp_firmware "${boot_dir}" "${serial}" "${model}"
-  ha_pxe::log_info "Binding TFTP trees for ${serial} and ${short_serial}"
   ha_pxe::bind_tftp_tree "${boot_dir}" "${serial}" "${short_serial}"
+  log_stage info "${serial}" tftp completed "TFTP trees are bound for ${serial} and ${short_serial}"
 
-  ha_pxe::log_info "Prepared client ${hostname} (${serial}) using ${arch}"
+  log_stage info "${serial}" prepare completed "Prepared client ${hostname} (${serial}) using ${arch}"
 }
 
 main "$@"

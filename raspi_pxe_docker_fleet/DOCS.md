@@ -8,12 +8,16 @@ Each configured client gets:
 - a first-boot user setup
 - Docker installed on first boot
 - local Docker workload reconciliation on the client
+- client-side deployment logs mirrored back into the add-on log
 
 ## Before you start
 
 - Disable Home Assistant Protection mode before starting the add-on.
 - Make sure your Raspberry Pi model and bootloader support network boot.
 - Provide DHCP or ProxyDHCP separately. This add-on does not serve DHCP.
+- Allow provisioned clients to reach the Home Assistant host on TCP `8099` so
+  first-boot and container reconciliation logs can be relayed into the add-on
+  log stream.
 
 ## Example configuration
 
@@ -127,6 +131,25 @@ clients:
 - `default_locale`: Optional locale name to apply on first boot.
 - `ssh_authorized_keys`: Optional newline-separated OpenSSH public keys.
 - `clients`: List of Raspberry Pi clients to provision.
+
+## Deployment logging
+
+Provisioned clients automatically send stage-based logs back to the add-on over
+HTTP on TCP `8099` using the fixed path `/client-log`. You do not need to add
+anything to the client config for this.
+
+The add-on log now shows:
+
+- add-on-side provisioning stages such as image selection, rootfs population,
+  bootstrap injection, NFS export registration, and TFTP publication
+- client first-boot stages such as hostname/user setup, locale defaults,
+  package installation, access configuration, and service startup
+- recurring client container-sync stages such as spec validation, image
+  pulls/builds, generated file materialization, container creation/recreation,
+  and stale resource cleanup
+
+If a first-boot or container-sync stage fails on the client, the add-on log
+receives a `stage=... status=failed` entry with the client hostname and serial.
 
 Client fields:
 

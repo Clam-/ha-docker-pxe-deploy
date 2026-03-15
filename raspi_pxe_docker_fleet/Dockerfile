@@ -15,6 +15,7 @@ RUN apk add --no-cache \
     openssl \
     parted \
     rsync \
+    socat \
     shadow \
     util-linux \
     xz \
@@ -24,6 +25,7 @@ COPY rootfs /
 
 RUN chmod a+x \
     /run.sh \
+    /usr/local/lib/ha-pxe/client-log-server.sh \
     /usr/local/lib/ha-pxe/provision-client.sh \
     /usr/local/lib/ha-pxe/templates/ha-pxe-firstboot.sh \
     /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.sh

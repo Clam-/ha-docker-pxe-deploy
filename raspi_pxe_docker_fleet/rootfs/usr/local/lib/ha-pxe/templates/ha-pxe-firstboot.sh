@@ -3,26 +3,49 @@ set -Eeuo pipefail
 
 source /etc/ha-pxe/bootstrap.env
 
+HA_PXE_CLIENT_LOG_PREFIX="ha-pxe-firstboot"
+HA_PXE_CLIENT_LOG_SOURCE="firstboot"
+source /usr/local/lib/ha-pxe/client-log.sh
+
 MARKER_FILE="/var/lib/ha-pxe/firstboot.done"
 
+trap 'ha_pxe_client::err_trap "$?" "${LINENO}"' ERR
+
+log_info() {
+  ha_pxe_client::log info "${HA_PXE_CLIENT_LOG_CURRENT_STAGE:-firstboot}" in_progress "$*"
+}
+
+log_warning() {
+  ha_pxe_client::log warn "${HA_PXE_CLIENT_LOG_CURRENT_STAGE:-firstboot}" warning "$*"
+}
+
 ensure_group_memberships() {
-  local group
+  local group added_groups=0 skipped_groups=0
+
   IFS=',' read -ra groups <<<"${PXE_EXTRA_GROUPS:-}"
   for group in "${groups[@]}"; do
     [[ -n "${group}" ]] || continue
     if getent group "${group}" >/dev/null 2>&1; then
       usermod -aG "${group}" "${PXE_USERNAME}" || true
+      added_groups=$((added_groups + 1))
+    else
+      skipped_groups=$((skipped_groups + 1))
+      log_info "Group ${group} is not present on the client; skipping membership"
     fi
   done
+
+  log_info "Group membership reconciliation complete: added=${added_groups} missing=${skipped_groups}"
 }
 
 configure_ssh_keys() {
   if [[ ! -s /etc/ha-pxe/authorized_keys ]]; then
+    log_info "No authorized SSH keys were supplied for ${PXE_USERNAME}"
     return 0
   fi
 
   install -d -m 700 -o "${PXE_USERNAME}" -g "${PXE_USERNAME}" "/home/${PXE_USERNAME}/.ssh"
   install -m 600 -o "${PXE_USERNAME}" -g "${PXE_USERNAME}" /etc/ha-pxe/authorized_keys "/home/${PXE_USERNAME}/.ssh/authorized_keys"
+  log_info "Installed authorized SSH keys for ${PXE_USERNAME}"
 }
 
 clear_stock_ssh_banner() {
@@ -34,6 +57,8 @@ clear_stock_ssh_banner() {
   if [[ -f /usr/share/userconf-pi/sshd_banner ]]; then
     : > /usr/share/userconf-pi/sshd_banner
   fi
+
+  log_info "Cleared Raspberry Pi OS stock SSH rename prompts"
 }
 
 seed_noninteractive_defaults() {
@@ -122,6 +147,8 @@ seed_noninteractive_defaults() {
     locale_charset="${locale_value#*.}"
     locale_charset="${locale_charset%%@*}"
   fi
+
+  log_info "Applying locale defaults: locale=${locale_value} timezone=${timezone_value} keyboard=${keyboard_layout}"
 
   cat > /etc/default/keyboard <<EOF
 # KEYBOARD CONFIGURATION FILE
@@ -251,19 +278,30 @@ EOF
   if command -v setupcon >/dev/null 2>&1; then
     setupcon --save-only >/dev/null 2>&1 || true
   fi
+
+  log_info "Locale defaults written successfully"
 }
 
 main() {
   mkdir -p /var/lib/ha-pxe
 
+  ha_pxe_client::stage_start preflight "Starting first-boot provisioning for ${PXE_HOSTNAME} (${PXE_SERIAL})"
   if [[ -f "${MARKER_FILE}" ]]; then
+    ha_pxe_client::stage_skip preflight "First-boot marker already exists; nothing to do"
     exit 0
   fi
+  ha_pxe_client::stage_complete preflight "First-boot marker is absent; continuing with provisioning"
 
-  hostnamectl set-hostname "${PXE_HOSTNAME}" || true
+  ha_pxe_client::stage_start identity "Configuring hostname and default user metadata"
+  if hostnamectl set-hostname "${PXE_HOSTNAME}"; then
+    log_info "hostnamectl updated the transient hostname to ${PXE_HOSTNAME}"
+  else
+    log_warning "hostnamectl could not update the transient hostname; continuing with file-based hostname changes"
+  fi
 
   if [[ ! -f /etc/hostname || "$(cat /etc/hostname)" != "${PXE_HOSTNAME}" ]]; then
     printf '%s\n' "${PXE_HOSTNAME}" > /etc/hostname
+    log_info "/etc/hostname updated to ${PXE_HOSTNAME}"
   fi
 
   if [[ -f /etc/hosts ]]; then
@@ -272,47 +310,90 @@ main() {
     else
       printf '127.0.1.1\t%s\n' "${PXE_HOSTNAME}" >> /etc/hosts
     fi
+    log_info "/etc/hosts now maps 127.0.1.1 to ${PXE_HOSTNAME}"
   fi
 
   if ! id "${PXE_USERNAME}" >/dev/null 2>&1; then
     useradd -m -s /bin/bash "${PXE_USERNAME}"
+    log_info "Created default user ${PXE_USERNAME}"
+  else
+    log_info "Default user ${PXE_USERNAME} already exists"
   fi
 
   if [[ -n "${PXE_PASSWORD_HASH:-}" ]]; then
     usermod -p "${PXE_PASSWORD_HASH}" "${PXE_USERNAME}"
+    log_info "Applied the configured password hash for ${PXE_USERNAME}"
   else
     passwd -l "${PXE_USERNAME}" || true
+    log_info "Locked the password for ${PXE_USERNAME}; SSH key authentication is expected"
   fi
+  ha_pxe_client::stage_complete identity "Hostname and default user configuration complete"
 
+  ha_pxe_client::stage_start locale-defaults "Applying non-interactive locale, timezone, and keyboard defaults"
   seed_noninteractive_defaults
+  ha_pxe_client::stage_complete locale-defaults "Locale, timezone, and keyboard defaults applied"
 
+  ha_pxe_client::stage_start packages "Installing Docker and bootstrap dependencies"
   export DEBIAN_FRONTEND=noninteractive
   export DEBCONF_FRONTEND=noninteractive
   export DEBCONF_NONINTERACTIVE_SEEN=true
   export DEBIAN_PRIORITY=critical
   export NEEDRESTART_MODE=a
+  log_info "Refreshing apt package indexes"
   apt-get update
+  log_info "Installing ca-certificates, curl, docker.io, git, and jq"
   apt-get install -y --no-install-recommends \
     -o Dpkg::Options::=--force-confdef \
     -o Dpkg::Options::=--force-confold \
     ca-certificates curl docker.io git jq
+  ha_pxe_client::stage_complete packages "Base packages for Docker workloads were installed"
 
+  ha_pxe_client::stage_start access "Applying group memberships and SSH access settings"
   ensure_group_memberships
   configure_ssh_keys
   clear_stock_ssh_banner
+  ha_pxe_client::stage_complete access "User access configuration completed"
 
+  ha_pxe_client::stage_start services "Enabling and starting Docker, SSH, and container-sync services"
   systemctl daemon-reload
   systemctl enable docker.service
-  systemctl enable containerd.service || true
-  systemctl enable ssh.service || true
+  log_info "Enabled docker.service"
+  if systemctl enable containerd.service; then
+    log_info "Enabled containerd.service"
+  else
+    log_warning "containerd.service could not be enabled; continuing"
+  fi
+  if systemctl enable ssh.service; then
+    log_info "Enabled ssh.service"
+  else
+    log_warning "ssh.service could not be enabled; continuing"
+  fi
   systemctl enable ha-pxe-container-sync.timer
+  log_info "Enabled ha-pxe-container-sync.timer"
   systemctl start docker.service
-  systemctl start ssh.service || true
-  systemctl try-reload-or-restart ssh.service || true
-  systemctl start ha-pxe-container-sync.service || true
+  log_info "Started docker.service"
+  if systemctl start ssh.service; then
+    log_info "Started ssh.service"
+  else
+    log_warning "ssh.service could not be started; continuing"
+  fi
+  if systemctl try-reload-or-restart ssh.service; then
+    log_info "Reloaded or restarted ssh.service"
+  else
+    log_warning "ssh.service could not be reloaded or restarted cleanly"
+  fi
+  if systemctl start ha-pxe-container-sync.service; then
+    log_info "Triggered an initial ha-pxe-container-sync.service run"
+  else
+    log_warning "Initial ha-pxe-container-sync.service run failed to start; the recurring timer will retry"
+  fi
   systemctl start ha-pxe-container-sync.timer
+  log_info "Started ha-pxe-container-sync.timer"
+  ha_pxe_client::stage_complete services "Runtime services are enabled and started"
 
+  ha_pxe_client::stage_start finalize "Recording first-boot completion marker"
   touch "${MARKER_FILE}"
+  ha_pxe_client::stage_complete finalize "First-boot provisioning completed successfully"
 }
 
 main "$@"
