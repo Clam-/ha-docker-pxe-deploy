@@ -76,7 +76,12 @@ ha_pxe_client::emit_remote() {
     if timeout 3 bash -c '
       exec 9<>"/dev/tcp/$1/$2" || exit 1
       printf "%s" "$3" >&9
-      IFS= read -r _ <&9 || true
+      IFS= read -r status_line <&9 || exit 1
+      case "$status_line" in
+        HTTP/*" 204 "*|HTTP/*" 200 "*) ;;
+        *) exit 1 ;;
+      esac
+      cat <&9 >/dev/null || true
       exec 9<&-
       exec 9>&-
     ' _ "${PXE_LOG_HOST}" "${PXE_LOG_PORT}" "${request}" >/dev/null 2>&1; then
@@ -87,7 +92,12 @@ ha_pxe_client::emit_remote() {
     if bash -c '
       exec 9<>"/dev/tcp/$1/$2" || exit 1
       printf "%s" "$3" >&9
-      IFS= read -r _ <&9 || true
+      IFS= read -r status_line <&9 || exit 1
+      case "$status_line" in
+        HTTP/*" 204 "*|HTTP/*" 200 "*) ;;
+        *) exit 1 ;;
+      esac
+      cat <&9 >/dev/null || true
       exec 9<&-
       exec 9>&-
     ' _ "${PXE_LOG_HOST}" "${PXE_LOG_PORT}" "${request}" >/dev/null 2>&1; then
