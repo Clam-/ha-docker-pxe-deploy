@@ -74,6 +74,17 @@ wait_for_transport() {
   return 1
 }
 
+configure_ssh_keys() {
+  if [[ ! -s /etc/ha-pxe/authorized_keys ]]; then
+    log_info "No authorized SSH keys were supplied for ${PXE_USERNAME}"
+    return 0
+  fi
+
+  install -d -m 700 -o "${PXE_USERNAME}" -g "${PXE_USERNAME}" "/home/${PXE_USERNAME}/.ssh"
+  install -m 600 -o "${PXE_USERNAME}" -g "${PXE_USERNAME}" /etc/ha-pxe/authorized_keys "/home/${PXE_USERNAME}/.ssh/authorized_keys"
+  log_info "Installed authorized SSH keys for ${PXE_USERNAME}"
+}
+
 main() {
   local boot_id marker_present docker_present route ipv4_summary
 
@@ -106,6 +117,7 @@ main() {
   log_info "$(unit_summary ha-pxe-container-sync.service)"
   log_info "$(unit_summary ha-pxe-container-sync.timer)"
   ha_pxe_client::stage_complete startup "Early boot diagnostics captured"
+  configure_ssh_keys
 }
 
 main "$@"
