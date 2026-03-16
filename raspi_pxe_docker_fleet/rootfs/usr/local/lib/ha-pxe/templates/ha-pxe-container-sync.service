@@ -3,7 +3,7 @@ Description=Reconcile Home Assistant managed Docker containers
 Wants=network-online.target docker.service
 After=network-online.target docker.service
 ConditionPathExists=/etc/ha-pxe/containers.json
-ConditionPathExists=/var/lib/ha-pxe/firstboot.done
+ConditionPathExists=/usr/bin/docker
 
 [Service]
 Type=oneshot
