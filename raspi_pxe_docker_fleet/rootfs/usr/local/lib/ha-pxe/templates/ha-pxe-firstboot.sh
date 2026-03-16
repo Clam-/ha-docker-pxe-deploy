@@ -387,7 +387,7 @@ main() {
   ha_pxe_client::stage_start finalize "Recording first-boot completion marker and starting reconciliation"
   touch "${MARKER_FILE}"
 
-  if systemctl start ha-pxe-container-sync.service; then
+  if systemctl --no-block start ha-pxe-container-sync.service; then
     log_info "Triggered an initial ha-pxe-container-sync.service run"
   else
     log_warning "Initial ha-pxe-container-sync.service run failed to start; the recurring timer will retry"
