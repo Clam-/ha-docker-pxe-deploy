@@ -134,12 +134,15 @@ write_bootstrap_files() {
   groups="${groups%,}"
 
   install -m 0644 /usr/local/lib/ha-pxe/templates/ha-pxe-firstboot.service "${root_dir}/etc/systemd/system/ha-pxe-firstboot.service"
+  install -m 0644 /usr/local/lib/ha-pxe/templates/ha-pxe-early-log.service "${root_dir}/etc/systemd/system/ha-pxe-early-log.service"
   install -m 0644 /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.service "${root_dir}/etc/systemd/system/ha-pxe-container-sync.service"
   install -m 0644 /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.timer "${root_dir}/etc/systemd/system/ha-pxe-container-sync.timer"
   install -m 0644 /usr/local/lib/ha-pxe/templates/ha-pxe-client-log.sh "${root_dir}/usr/local/lib/ha-pxe/client-log.sh"
+  install -m 0755 /usr/local/lib/ha-pxe/templates/ha-pxe-early-log.sh "${root_dir}/usr/local/sbin/ha-pxe-early-log"
   install -m 0755 /usr/local/lib/ha-pxe/templates/ha-pxe-firstboot.sh "${root_dir}/usr/local/sbin/ha-pxe-firstboot"
   install -m 0755 /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.sh "${root_dir}/usr/local/sbin/ha-pxe-container-sync"
 
+  ln -snf ../ha-pxe-early-log.service "${root_dir}/etc/systemd/system/multi-user.target.wants/ha-pxe-early-log.service"
   ln -snf ../ha-pxe-firstboot.service "${root_dir}/etc/systemd/system/multi-user.target.wants/ha-pxe-firstboot.service"
   ln -snf ../ha-pxe-container-sync.timer "${root_dir}/etc/systemd/system/timers.target.wants/ha-pxe-container-sync.timer"
 

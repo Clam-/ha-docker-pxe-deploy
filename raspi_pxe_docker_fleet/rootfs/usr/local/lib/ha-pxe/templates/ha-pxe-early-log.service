@@ -1,14 +1,14 @@
 [Unit]
-Description=Home Assistant PXE client first boot provisioning
-Wants=network-online.target
-After=network-online.target cloud-final.service ha-pxe-early-log.service
+Description=Home Assistant PXE early boot diagnostics
+Wants=network.target
+After=network.target
+Before=ha-pxe-firstboot.service
 ConditionPathExists=/etc/ha-pxe/bootstrap.env
 ConditionPathExists=!/var/lib/ha-pxe/firstboot.done
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/sbin/ha-pxe-firstboot
-RemainAfterExit=yes
+ExecStart=/usr/local/sbin/ha-pxe-early-log
 StandardInput=null
 StandardOutput=journal
 StandardError=journal
