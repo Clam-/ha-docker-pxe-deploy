@@ -1,6 +1,7 @@
 [Unit]
 Description=Home Assistant PXE early boot diagnostics
 Wants=network.target
+Wants=ha-pxe-firstboot.service
 After=network.target
 Before=ha-pxe-firstboot.service
 ConditionPathExists=/etc/ha-pxe/bootstrap.env
