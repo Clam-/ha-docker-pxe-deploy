@@ -143,7 +143,6 @@ write_bootstrap_files() {
   install -m 0755 /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.sh "${root_dir}/usr/local/sbin/ha-pxe-container-sync"
 
   ln -snf ../ha-pxe-early-log.service "${root_dir}/etc/systemd/system/multi-user.target.wants/ha-pxe-early-log.service"
-  rm -f "${root_dir}/etc/systemd/system/multi-user.target.wants/ha-pxe-firstboot.service"
   ln -snf ../ha-pxe-container-sync.timer "${root_dir}/etc/systemd/system/timers.target.wants/ha-pxe-container-sync.timer"
 
   cat > "${root_dir}/etc/ha-pxe/bootstrap.env" <<EOF

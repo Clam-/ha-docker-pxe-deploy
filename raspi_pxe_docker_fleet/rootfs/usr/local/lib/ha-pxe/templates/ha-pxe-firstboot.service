@@ -12,6 +12,3 @@ RemainAfterExit=yes
 StandardInput=null
 StandardOutput=journal
 StandardError=journal
-
-[Install]
-WantedBy=multi-user.target

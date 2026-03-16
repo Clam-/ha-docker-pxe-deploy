@@ -8,6 +8,7 @@ HA_PXE_CLIENT_LOG_SOURCE="earlyboot"
 source /usr/local/lib/ha-pxe/client-log.sh
 
 MARKER_FILE="/var/lib/ha-pxe/firstboot.done"
+MARKER_FILE2="/etc/ha-pxe/bootstrap.env"
 
 trap 'ha_pxe_client::err_trap "$?" "${LINENO}"' ERR
 
@@ -86,7 +87,7 @@ configure_ssh_keys() {
 }
 
 main() {
-  local boot_id marker_present docker_present route ipv4_summary
+  local boot_id marker_present marker_present2 docker_present route ipv4_summary
 
   ha_pxe_client::emit_local info startup started "Starting early boot diagnostics for ${PXE_HOSTNAME} (${PXE_SERIAL})"
   wait_for_transport || true
@@ -101,21 +102,17 @@ main() {
   if [[ -f "${MARKER_FILE}" ]]; then
     marker_present="yes"
   fi
+  marker_present2="no"
+  if [[ -f "${MARKER_FILE2}" ]]; then
+    marker_present2="yes"
+  fi
 
   docker_present="no"
   if command -v docker >/dev/null 2>&1; then
     docker_present="yes"
   fi
 
-  log_info "boot_id=${boot_id} marker_present=${marker_present} docker_present=${docker_present}"
-  log_info "default_route=${route}"
-  log_info "ipv4_addresses=${ipv4_summary}"
-  log_info "$(unit_summary network.target)"
-  log_info "$(unit_summary network-online.target)"
-  log_info "$(unit_summary ha-pxe-early-log.service)"
-  log_info "$(unit_summary ha-pxe-firstboot.service)"
-  log_info "$(unit_summary ha-pxe-container-sync.service)"
-  log_info "$(unit_summary ha-pxe-container-sync.timer)"
+  log_info "boot_id=${boot_id} marker_present=${marker_present} marker_present2=${marker_present2} docker_present=${docker_present}"
   ha_pxe_client::stage_complete startup "Early boot diagnostics captured"
   configure_ssh_keys
 }
