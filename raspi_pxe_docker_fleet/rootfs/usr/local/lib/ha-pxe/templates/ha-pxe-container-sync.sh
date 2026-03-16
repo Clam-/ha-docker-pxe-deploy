@@ -29,6 +29,22 @@ log_error() {
   ha_pxe_client::log error "${HA_PXE_CLIENT_LOG_CURRENT_STAGE:-sync}" error "$*"
 }
 
+join_with_delimiter() {
+  local delimiter="${1}"
+  shift || true
+
+  local item joined=""
+  for item in "$@"; do
+    [[ -n "${item}" ]] || continue
+    if [[ -n "${joined}" ]]; then
+      joined+="${delimiter}"
+    fi
+    joined+="${item}"
+  done
+
+  printf '%s\n' "${joined}"
+}
+
 slug() {
   local value="${1}"
 
@@ -490,19 +506,29 @@ reconcile_container() {
 
 cleanup_stale_containers() {
   local -n desired_ref="${1}"
-  local container_id existing_name existing_key
+  local container_id existing_name existing_key existing_serial stale_reason
 
   while IFS= read -r container_id; do
     [[ -n "${container_id}" ]] || continue
-    existing_key="$(docker inspect --format '{{ index .Config.Labels "io.ha_pxe.container_key" }}' "${container_id}" 2>/dev/null || true)"
+    existing_key="$(docker inspect --format '{{with index .Config.Labels "io.ha_pxe.container_key"}}{{.}}{{end}}' "${container_id}" 2>/dev/null || true)"
+    existing_serial="$(docker inspect --format '{{with index .Config.Labels "io.ha_pxe.client_serial"}}{{.}}{{end}}' "${container_id}" 2>/dev/null || true)"
     if [[ -n "${existing_key}" && -n "${desired_ref[${existing_key}]+set}" ]]; then
       continue
     fi
 
-    existing_name="$(docker inspect --format '{{.Name}}' "${container_id}" | sed 's#^/##')"
-    log_info "Removing stale container ${existing_name}"
+    existing_name="$(docker inspect --format '{{.Name}}' "${container_id}" 2>/dev/null | sed 's#^/##' || true)"
+    if [[ -z "${existing_key}" ]]; then
+      stale_reason="missing io.ha_pxe.container_key label"
+    else
+      stale_reason="container key ${existing_key} is not present in the desired key set"
+    fi
+    log_info "Removing stale container ${existing_name:-${container_id}} (id=${container_id} key=${existing_key:-missing} serial=${existing_serial:-missing} reason=${stale_reason})"
     docker rm -f "${container_id}" >/dev/null || true
-  done < <(docker ps -aq --filter label=io.ha_pxe.managed=true)
+  done < <(
+    docker ps -aq \
+      --filter label=io.ha_pxe.managed=true \
+      --filter "label=io.ha_pxe.client_serial=${PXE_SERIAL}"
+  )
 }
 
 cleanup_stale_state_dirs() {
@@ -518,15 +544,93 @@ cleanup_stale_state_dirs() {
       continue
     fi
 
-    log_info "Removing stale state directory ${state_dir}"
+    log_info "Removing stale state directory ${state_dir} (key=${key} reason=state directory key is not present in the desired key set)"
     rm -rf "${state_dir}"
   done < <(find "${STATE_ROOT}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
 }
 
+describe_desired_keys() {
+  local -n desired_ref="${1}"
+  local -n desired_names_ref="${2}"
+  local key
+  local -a entries=()
+
+  if ((${#desired_ref[@]} == 0)); then
+    printf 'none\n'
+    return 0
+  fi
+
+  while IFS= read -r key; do
+    [[ -n "${key}" ]] || continue
+    entries+=("${desired_names_ref[${key}]:-unknown}[key=${key}]")
+  done < <(printf '%s\n' "${!desired_ref[@]}" | sort)
+
+  join_with_delimiter '; ' "${entries[@]}"
+}
+
+describe_managed_containers() {
+  local details container_id existing_name existing_key existing_serial existing_state
+  local -a entries=()
+
+  while IFS= read -r container_id; do
+    [[ -n "${container_id}" ]] || continue
+    details="$(docker inspect --format '{{.Name}}|{{with index .Config.Labels "io.ha_pxe.container_key"}}{{.}}{{end}}|{{with index .Config.Labels "io.ha_pxe.client_serial"}}{{.}}{{end}}|{{.State.Status}}' "${container_id}" 2>/dev/null || true)"
+    [[ -n "${details}" ]] || continue
+    IFS='|' read -r existing_name existing_key existing_serial existing_state <<<"${details}"
+    existing_name="${existing_name#/}"
+    entries+=("${existing_name:-${container_id}}[key=${existing_key:-missing},serial=${existing_serial:-missing},state=${existing_state:-unknown}]")
+  done < <(
+    docker ps -aq \
+      --filter label=io.ha_pxe.managed=true \
+      --filter "label=io.ha_pxe.client_serial=${PXE_SERIAL}"
+  )
+
+  if ((${#entries[@]} == 0)); then
+    printf 'none\n'
+    return 0
+  fi
+
+  join_with_delimiter '; ' "${entries[@]}"
+}
+
+describe_state_dirs() {
+  local state_dir
+  local -a entries=()
+
+  mkdir -p "${STATE_ROOT}"
+
+  while IFS= read -r state_dir; do
+    [[ -n "${state_dir}" ]] || continue
+    entries+=("${state_dir##*/}")
+  done < <(find "${STATE_ROOT}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort)
+
+  if ((${#entries[@]} == 0)); then
+    printf 'none\n'
+    return 0
+  fi
+
+  join_with_delimiter ', ' "${entries[@]}"
+}
+
+log_cleanup_inventory() {
+  local desired_ref_name="${1}"
+  local desired_names_ref_name="${2}"
+  local desired_summary managed_summary state_dir_summary
+
+  desired_summary="$(describe_desired_keys "${desired_ref_name}" "${desired_names_ref_name}")"
+  managed_summary="$(describe_managed_containers)"
+  state_dir_summary="$(describe_state_dirs)"
+
+  log_info "Cleanup desired containers: ${desired_summary}"
+  log_info "Managed container inventory before cleanup: ${managed_summary}"
+  log_info "Managed state directories before cleanup: ${state_dir_summary}"
+}
+
 main() {
-  local spec key desired_json desired_count
+  local spec key desired_json desired_count display_name
   local had_error=false
   declare -A desired_keys=()
+  declare -A desired_names=()
 
   ha_pxe_client::stage_start preflight "Starting managed container reconciliation for ${PXE_HOSTNAME} (${PXE_SERIAL})"
   if ! command -v docker >/dev/null 2>&1; then
@@ -560,7 +664,9 @@ main() {
   while IFS= read -r spec; do
     [[ -n "${spec}" ]] || continue
     key="$(spec_key "${spec}")"
+    display_name="$(jq -r '.name' <<<"${spec}")"
     desired_keys["${key}"]=1
+    desired_names["${key}"]="${display_name}"
   done < <(jq -c '.[]?' <<<"${desired_json}")
 
   ha_pxe_client::stage_start reconcile "Reconciling each desired managed container"
@@ -577,14 +683,16 @@ main() {
     ha_pxe_client::stage_complete reconcile "All managed containers were reconciled successfully"
   fi
 
+  if [[ "${had_error}" == "true" ]]; then
+    ha_pxe_client::stage_skip cleanup "Skipping stale managed resource cleanup because one or more containers failed to reconcile"
+    exit 1
+  fi
+
   ha_pxe_client::stage_start cleanup "Removing stale managed containers and cached state"
+  log_cleanup_inventory desired_keys desired_names
   cleanup_stale_containers desired_keys
   cleanup_stale_state_dirs desired_keys
   ha_pxe_client::stage_complete cleanup "Stale managed containers and state directories were cleaned up"
-
-  if [[ "${had_error}" == "true" ]]; then
-    exit 1
-  fi
 
   ha_pxe_client::stage_start summary "Finalizing container reconciliation"
   ha_pxe_client::stage_complete summary "Managed container reconciliation completed successfully"
