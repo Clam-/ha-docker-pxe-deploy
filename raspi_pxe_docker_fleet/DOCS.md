@@ -5,6 +5,7 @@ Each configured client gets:
 
 - a TFTP boot tree
 - a dedicated NFS root filesystem
+- swap disabled in the exported root before first boot
 - a first-boot user setup
 - Docker installed on first boot
 - local Docker workload reconciliation on the client

@@ -14,6 +14,7 @@ RUN apk add --no-cache \
     jq \
     openssl \
     parted \
+    python3 \
     rsync \
     socat \
     shadow \
@@ -24,11 +25,11 @@ RUN apk add --no-cache \
 COPY rootfs /
 
 RUN chmod a+x \
-    /run.sh \
-    /usr/local/lib/ha-pxe/client-log-server.sh \
-    /usr/local/lib/ha-pxe/provision-client.sh \
-    /usr/local/lib/ha-pxe/templates/ha-pxe-early-log.sh \
-    /usr/local/lib/ha-pxe/templates/ha-pxe-firstboot.sh \
-    /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.sh
+    /run.py \
+    /usr/local/lib/ha-pxe/client-log-server.py \
+    /usr/local/lib/ha-pxe/provision-client.py \
+    /usr/local/lib/ha-pxe/templates/ha-pxe-early-log.py \
+    /usr/local/lib/ha-pxe/templates/ha-pxe-firstboot.py \
+    /usr/local/lib/ha-pxe/templates/ha-pxe-container-sync.py
 
-CMD ["/run.sh"]
+CMD ["/run.py"]
