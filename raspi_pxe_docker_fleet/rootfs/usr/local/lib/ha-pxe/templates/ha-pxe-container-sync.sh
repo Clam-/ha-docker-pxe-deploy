@@ -308,17 +308,35 @@ ensure_desired_image() {
   case "${source_type}" in
     image)
       log_info "Pulling ${image_name}"
-      docker pull "${image_name}" >/dev/null
+      if ! docker pull "${image_name}" >/dev/null; then
+        log_error "Failed to pull ${image_name}"
+        return 1
+      fi
       log_info "Pulled ${image_name} successfully"
-      docker image inspect --format '{{.Id}}' "${image_name}"
+      if ! docker image inspect --format '{{.Id}}' "${image_name}"; then
+        log_error "Pulled ${image_name} but Docker cannot inspect the image locally"
+        return 1
+      fi
       ;;
     git)
-      prepare_git_build "${spec}" "${state_dir}"
-      build_image_if_needed "${spec}" "${key}" "${state_dir}"
+      if ! prepare_git_build "${spec}" "${state_dir}"; then
+        log_error "Failed to prepare git build inputs for ${image_name}"
+        return 1
+      fi
+      if ! build_image_if_needed "${spec}" "${key}" "${state_dir}"; then
+        log_error "Failed to build or inspect ${image_name}"
+        return 1
+      fi
       ;;
     dockerfile_url)
-      prepare_remote_dockerfile_build "${spec}" "${state_dir}"
-      build_image_if_needed "${spec}" "${key}" "${state_dir}"
+      if ! prepare_remote_dockerfile_build "${spec}" "${state_dir}"; then
+        log_error "Failed to prepare remote Dockerfile build inputs for ${image_name}"
+        return 1
+      fi
+      if ! build_image_if_needed "${spec}" "${key}" "${state_dir}"; then
+        log_error "Failed to build or inspect ${image_name}"
+        return 1
+      fi
       ;;
     *)
       log_error "Unsupported source type: ${source_type}"
@@ -456,7 +474,10 @@ run_container() {
   done < <(jq -r '.command[]?' <<<"${spec}")
 
   log_info "Starting ${container_name} from ${image_name}"
-  "${run_cmd[@]}"
+  if ! "${run_cmd[@]}"; then
+    log_error "Failed to start ${container_name} from ${image_name}"
+    return 1
+  fi
 }
 
 reconcile_container() {
@@ -473,8 +494,14 @@ reconcile_container() {
   ha_pxe_client::stage_start "${stage_name}" "Reconciling container ${display_name}"
   mkdir -p "${state_dir}"
   log_info "State directory for ${display_name} is ${state_dir}"
-  desired_image_id="$(ensure_desired_image "${spec}" "${key}" "${state_dir}")"
-  materialize_files "${spec}" "${state_dir}"
+  if ! desired_image_id="$(ensure_desired_image "${spec}" "${key}" "${state_dir}")"; then
+    ha_pxe_client::stage_fail "${stage_name}" "Failed to prepare image for ${display_name}"
+    return 1
+  fi
+  if ! materialize_files "${spec}" "${state_dir}"; then
+    ha_pxe_client::stage_fail "${stage_name}" "Failed to materialize generated files for ${display_name}"
+    return 1
+  fi
   desired_spec_hash="$(spec_hash "${spec}")"
   current_spec_hash="$(docker inspect --format '{{ index .Config.Labels "io.ha_pxe.spec_hash" }}' "${container_name}" 2>/dev/null || true)"
   current_image_id="$(docker inspect --format '{{.Image}}' "${container_name}" 2>/dev/null || true)"
@@ -482,15 +509,24 @@ reconcile_container() {
 
   if [[ -z "${current_image_id}" ]]; then
     log_info "Container ${container_name} does not exist yet; creating it"
-    run_container "${spec}" "${key}" "${container_name}" "${desired_spec_hash}"
+    if ! run_container "${spec}" "${key}" "${container_name}" "${desired_spec_hash}"; then
+      ha_pxe_client::stage_fail "${stage_name}" "Failed to create container ${display_name}"
+      return 1
+    fi
     ha_pxe_client::stage_complete "${stage_name}" "Created container ${display_name}"
     return 0
   fi
 
   if [[ "${current_image_id}" != "${desired_image_id}" || "${current_spec_hash}" != "${desired_spec_hash}" ]]; then
     log_info "Recreating ${container_name}"
-    docker rm -f "${container_name}" >/dev/null
-    run_container "${spec}" "${key}" "${container_name}" "${desired_spec_hash}"
+    if ! docker rm -f "${container_name}" >/dev/null; then
+      ha_pxe_client::stage_fail "${stage_name}" "Failed to remove existing container ${display_name} before recreation"
+      return 1
+    fi
+    if ! run_container "${spec}" "${key}" "${container_name}" "${desired_spec_hash}"; then
+      ha_pxe_client::stage_fail "${stage_name}" "Failed to recreate container ${display_name}"
+      return 1
+    fi
     ha_pxe_client::stage_complete "${stage_name}" "Recreated container ${display_name} with updated image or spec"
     return 0
   fi
@@ -500,7 +536,10 @@ reconcile_container() {
   else
     log_info "Container ${container_name} is already up to date"
   fi
-  docker start "${container_name}" >/dev/null 2>&1 || true
+  if ! docker start "${container_name}" >/dev/null 2>&1; then
+    ha_pxe_client::stage_fail "${stage_name}" "Container ${display_name} exists but Docker could not start it"
+    return 1
+  fi
   ha_pxe_client::stage_complete "${stage_name}" "Container ${display_name} matches the desired state"
 }
 
