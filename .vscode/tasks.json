@@ -1,0 +1,69 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Start Home Assistant",
+      "type": "shell",
+      "command": "supervisor_run",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Prepare Local Add-on",
+      "type": "shell",
+      "command": "bash scripts/ha-dev.sh prepare",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Rebuild Local Add-on",
+      "type": "shell",
+      "command": "bash scripts/ha-dev.sh rebuild",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Restart Local Add-on",
+      "type": "shell",
+      "command": "bash scripts/ha-dev.sh restart",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Show Local Add-on Status",
+      "type": "shell",
+      "command": "bash scripts/ha-dev.sh status",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Follow Local Add-on Logs",
+      "type": "shell",
+      "command": "bash scripts/ha-dev.sh logs",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

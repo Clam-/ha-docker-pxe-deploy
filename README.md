@@ -20,6 +20,35 @@ The add-on prepares Raspberry Pi network-boot clients by:
 4. Configure at least one Raspberry Pi client plus a login method.
 5. Point your DHCP or ProxyDHCP service at the Home Assistant host for TFTP.
 
+## Devcontainer Harness
+
+This repository now includes a Home Assistant add-on development harness built
+around the official Home Assistant `apps` devcontainer.
+
+Files:
+
+- `.devcontainer/devcontainer.json` starts the Home Assistant devcontainer and
+  mounts this repository as a local add-on repository
+- `.vscode/tasks.json` exposes the common add-on loop inside the container
+- `scripts/ha-dev.sh` automates install, dev config, rebuild, restart, and log
+  follow for the local add-on
+- `.devcontainer/raspi_pxe_docker_fleet.options.json` provides a committed
+  default dev-only options payload
+
+Recommended loop:
+
+1. Open the repository in the devcontainer.
+2. Run the VS Code task `Start Home Assistant`.
+3. Run the VS Code task `Prepare Local Add-on`.
+4. Visit `http://localhost:7123` to inspect the Home Assistant instance.
+5. After code changes, run `Rebuild Local Add-on` and `Follow Local Add-on Logs`.
+
+The helper script targets the detected add-on as `local_raspi_pxe_docker_fleet`
+and posts the dev options payload to the Supervisor API before rebuilding. If
+you want a machine-local override without editing the tracked file, create
+`.devcontainer/raspi_pxe_docker_fleet.options.local.json`; it is ignored by
+git and takes precedence automatically.
+
 ## Agent Guidance
 
 This repository supports a remote-client Docker deployment model. If an agent or

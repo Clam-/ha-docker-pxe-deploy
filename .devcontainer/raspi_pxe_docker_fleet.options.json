@@ -1,0 +1,11 @@
+{
+  "log_level": "debug",
+  "server_ip": "",
+  "default_username": "pi",
+  "default_password": "ha-dev-only-please-change",
+  "default_timezone": "",
+  "default_keyboard_layout": "",
+  "default_locale": "",
+  "ssh_authorized_keys": "",
+  "clients": []
+}
