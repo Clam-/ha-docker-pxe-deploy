@@ -29,6 +29,9 @@ Files:
 
 - `.devcontainer/devcontainer.json` starts the Home Assistant devcontainer and
   mounts this repository as a local add-on repository
+- `.devcontainer/start-home-assistant.sh` wraps the Home Assistant
+  `supervisor_run` flow and preflights nested Docker registry access before
+  launching Supervisor
 - `.vscode/tasks.json` exposes the common add-on loop inside the container
 - `scripts/ha-dev.sh` automates install, dev config, rebuild, restart, and log
   follow for the local add-on
@@ -48,6 +51,10 @@ and posts the dev options payload to the Supervisor API before rebuilding. If
 you want a machine-local override without editing the tracked file, create
 `.devcontainer/raspi_pxe_docker_fleet.options.local.json`; it is ignored by
 git and takes precedence automatically.
+
+If your dev options file uses structured JSON for `clients[].containers`, the
+helper automatically converts that field into the string form Home Assistant
+expects before posting the options payload.
 
 ## Agent Guidance
 

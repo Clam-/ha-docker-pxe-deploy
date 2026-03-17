@@ -2,10 +2,72 @@
   "log_level": "debug",
   "server_ip": "",
   "default_username": "pi",
-  "default_password": "ha-dev-only-please-change",
-  "default_timezone": "",
-  "default_keyboard_layout": "",
-  "default_locale": "",
+  "default_password": "aaa",
+  "default_timezone": "Australia/Melbourne",
+  "default_keyboard_layout": "us",
+  "default_locale": "en_US.UTF-8",
   "ssh_authorized_keys": "",
-  "clients": []
+  "clients": [
+    {
+      "serial": "cdc843d7",
+      "model": "pi3",
+      "hostname": "test",
+      "image_arch": "auto",
+      "rebuild": true,
+      "containers": 
+        [
+          {
+            "name": "rgpiod",
+            "image": "ghcr.io/clam-docker-images/docker-rgpio:latest",
+            "env": {
+              "RGPIOD_PORT": "8889",
+              "RGPIOD_LOCAL_ONLY": "0"
+            },
+            "ports": [
+              "8889:8889"
+            ],
+            "devices": [
+              "/dev/gpiochip0:/dev/gpiochip0"
+            ]
+          },
+          {
+            "name": "janky-thermostat",
+            "image": "ghcr.io/clam-docker-images/janky-thermostat:latest",
+            "depends_on": [
+              "rgpiod"
+            ],
+            "env": {
+              "RGPIO_ADDR": "host.docker.internal",
+              "RGPIO_PORT": "8889",
+              "I2C_BUS": "0"
+            },
+            "extra_hosts": [
+              "host.docker.internal:host-gateway"
+            ],
+            "files": [
+              {
+                "container_path": "/config/config.json",
+                "format": "json",
+                "content": {
+                  "schedule": ["06:00 21.0", "22:30 18.0"],
+                  "min_temp": 20.0,
+                  "max_temp": 28.0,
+                  "posmin": 1034,
+                  "posmax": 24600,
+                  "posmargin": 50,
+                  "speed": 50.0,
+                  "lograte": 10,
+                  "updaterate": 15,
+                  "updir": 1,
+                  "i2c_bus": 0,
+                  "rgpio_addr": "host.docker.internal",
+                  "rgpio_port": 8889,
+                  "loglevel": "DEBUG"
+                }
+              }
+            ]
+          }
+        ]
+    }
+  ]
 }

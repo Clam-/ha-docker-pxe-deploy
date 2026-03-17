@@ -139,7 +139,30 @@ wait_for_ha() {
 
 
 addon_installed() {
-  ha apps info "${LOCAL_ADDON_SLUG}" --raw-json >/dev/null 2>&1
+  local info_json
+
+  info_json="$(ha apps info "${LOCAL_ADDON_SLUG}" --raw-json 2>/dev/null || true)"
+  [[ -n "${info_json}" ]] || return 1
+  printf '%s\n' "${info_json}" | jq -e '(.data.installed == true) or (.data.version != null)' >/dev/null 2>&1
+}
+
+
+normalize_options_json() {
+  local options_file="$1"
+
+  jq -c '
+    if (.clients? | type) == "array" then
+      .clients |= map(
+        if has("containers") and ((.containers | type) == "array" or (.containers | type) == "object") then
+          .containers = (.containers | tojson)
+        else
+          .
+        end
+      )
+    else
+      .
+    end
+  ' "${options_file}"
 }
 
 
@@ -245,7 +268,7 @@ configure_addon() {
   wait_for_ha
   install_addon
 
-  options_json="$(jq -c . "${options_file}")"
+  options_json="$(normalize_options_json "${options_file}")"
   wrapped_options_json="$(jq -cn --argjson options "${options_json}" '{options: $options}')"
 
   echo "Applying dev options from ${options_file}..."
