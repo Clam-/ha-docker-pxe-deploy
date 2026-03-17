@@ -16,9 +16,20 @@ from .fs_utils import clear_directory
 from .shell import capture, capture_optional, run
 
 
+HTTP_HEADERS = {
+    "User-Agent": "curl/8.0.1",
+    "Accept": "*/*",
+}
+
+
 def latest_image_url(context: AddonContext, arch: str) -> str:
-    with urllib.request.urlopen(context.paths.os_page, timeout=30) as response:
-        page = response.read().decode("utf-8", errors="replace")
+    request = _http_request(context.paths.os_page)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            page = response.read().decode("utf-8", errors="replace")
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise HaPxeError(f"Unable to fetch the Raspberry Pi OS page: {reason}") from exc
 
     if arch == "armhf":
         pattern = r"https://downloads\.raspberrypi\.com/raspios_lite_armhf/images/[^\"\s]+\.img\.xz"
@@ -107,7 +118,7 @@ def populate_from_image(context: AddonContext, image_path: Path, boot_dir: Path,
 
 
 def _download_with_progress(context: AddonContext, url: str, destination: Path, label: str) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": "ha-pxe"})
+    request = _http_request(url)
     content_length = _remote_content_length(url)
     last_percent = -5
     last_bytes = 0
@@ -145,7 +156,7 @@ def _download_with_progress(context: AddonContext, url: str, destination: Path, 
 
 
 def _remote_content_length(url: str) -> int | None:
-    request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "ha-pxe"})
+    request = _http_request(url, method="HEAD")
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
             raw = response.headers.get("Content-Length")
@@ -158,6 +169,10 @@ def _remote_content_length(url: str) -> int | None:
 
 def _format_mib(value: int) -> int:
     return (value + 1_048_575) // 1_048_576
+
+
+def _http_request(url: str, *, method: str = "GET") -> urllib.request.Request:
+    return urllib.request.Request(url, method=method, headers=HTTP_HEADERS)
 
 
 def _cleanup_loop_devices_for_image(context: AddonContext, image_path: Path) -> None:
