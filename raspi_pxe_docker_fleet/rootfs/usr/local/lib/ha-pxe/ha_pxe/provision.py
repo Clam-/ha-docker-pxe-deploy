@@ -43,6 +43,21 @@ DEFAULT_GROUPS = [
     "docker",
 ]
 
+CMDLINE_DROP_PREFIXES = (
+    "root=",
+    "rootfstype=",
+    "rootflags=",
+    "nfsroot=",
+    "ip=",
+    "init=",
+    "rdinit=",
+    "systemd.run=",
+    "systemd.run_success_action=",
+    "systemd.unit=",
+)
+
+CMDLINE_DROP_TOKENS = {"rootwait", "rw", "ro", "resize"}
+
 
 def provision_client(context: AddonContext, client: dict[str, object], server_ip: str) -> None:
     serial = normalize_serial(str(client.get("serial", "")))
@@ -128,25 +143,17 @@ def _rewrite_cmdline(context: AddonContext, boot_dir: Path, server_ip: str, root
     existing = " ".join((boot_dir / "cmdline.txt").read_text(encoding="utf-8").split())
     cleaned_tokens: list[str] = []
     for token in existing.split():
-        if token.startswith(
-            (
-                "root=",
-                "rootfstype=",
-                "nfsroot=",
-                "ip=",
-                "init=",
-                "systemd.run=",
-                "systemd.run_success_action=",
-                "systemd.unit=",
-            )
-        ) or token in {"rootwait", "rw", "ro", "resize"}:
+        if token.startswith(CMDLINE_DROP_PREFIXES) or token in CMDLINE_DROP_TOKENS:
             continue
         if token not in cleaned_tokens:
             cleaned_tokens.append(token)
 
     context.logger.debug(f"Original cmdline for {boot_dir}: {existing}")
     prefix = f"{' '.join(cleaned_tokens)} " if cleaned_tokens else ""
-    new_cmdline = f"{prefix}root=/dev/nfs nfsroot={server_ip}:{root_export},vers=3,tcp,nolock rw ip=dhcp rootwait\n"
+    new_cmdline = (
+        f"{prefix}root=/dev/nfs rootfstype=nfs "
+        f"nfsroot={server_ip}:{root_export},vers=3,tcp,nolock rw ip=dhcp rootwait\n"
+    )
     atomic_write(boot_dir / "cmdline.txt", new_cmdline)
     context.logger.debug(f"Rewritten cmdline for {boot_dir}: {new_cmdline.strip()}")
 
@@ -272,4 +279,3 @@ def _log_stage(context: AddonContext, level: str, serial: str, stage: str, statu
         context.logger.debug(prefix)
     else:
         context.logger.info(prefix)
-
