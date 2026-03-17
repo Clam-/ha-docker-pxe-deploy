@@ -8,6 +8,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 
 from .addon_context import AddonContext
@@ -20,6 +21,14 @@ HTTP_HEADERS = {
     "User-Agent": "curl/8.0.1",
     "Accept": "*/*",
 }
+
+SECTOR_SIZE_BYTES = 512
+
+
+@dataclass(frozen=True)
+class PartitionLoopDevice:
+    number: int
+    device: str
 
 
 def latest_image_url(context: AddonContext, arch: str) -> str:
@@ -69,23 +78,19 @@ def download_image(context: AddonContext, url: str) -> Path:
 def populate_from_image(context: AddonContext, image_path: Path, boot_dir: Path, root_dir: Path) -> None:
     mount_boot = Path(tempfile.mkdtemp(dir=context.paths.tmp_dir, prefix="boot."))
     mount_root = Path(tempfile.mkdtemp(dir=context.paths.tmp_dir, prefix="root."))
-    loop_device = ""
+    partition_loop_devices: list[PartitionLoopDevice] = []
     mounted_boot = False
     mounted_root = False
 
     try:
         context.logger.debug(f"Preparing loop device for {image_path.name}")
         _cleanup_loop_devices_for_image(context, image_path)
-        loop_device = capture(["losetup", "--find", "--show", "--read-only", "--partscan", str(image_path)])
-        if not loop_device:
-            raise HaPxeError(f"Failed to create a loop device for {image_path}")
+        partition_loop_devices = _attach_partition_loop_devices(context, image_path)
 
-        boot_partition = f"{loop_device}p1"
-        root_partition = f"{loop_device}p2"
-        context.logger.debug(f"Attached {image_path.name} to {loop_device}")
-        context.logger.debug(f"Waiting for partition devices {boot_partition} and {root_partition}")
-        if not _wait_for_block_device(boot_partition) or not _wait_for_block_device(root_partition):
-            raise HaPxeError(f"Partition devices for {loop_device} did not appear")
+        boot_partition = _partition_device(partition_loop_devices, 1)
+        root_partition = _partition_device(partition_loop_devices, 2)
+        context.logger.debug(f"Attached boot partition to {boot_partition}")
+        context.logger.debug(f"Attached root partition to {root_partition}")
 
         context.logger.debug(f"Mounting boot partition {boot_partition} to {mount_boot}")
         run(["mount", "-o", "ro", "-t", "vfat", boot_partition, str(mount_boot)])
@@ -109,8 +114,8 @@ def populate_from_image(context: AddonContext, image_path: Path, boot_dir: Path,
             run(["umount", str(mount_root)], check=False)
         if mounted_boot:
             run(["umount", str(mount_boot)], check=False)
-        if loop_device:
-            run(["losetup", "-d", loop_device], check=False)
+        for partition_loop_device in reversed(partition_loop_devices):
+            run(["losetup", "-d", partition_loop_device.device], check=False)
         if mount_boot.exists():
             mount_boot.rmdir()
         if mount_root.exists():
@@ -189,6 +194,69 @@ def _cleanup_loop_devices_for_image(context: AddonContext, image_path: Path) -> 
             continue
         context.logger.warning(f"Detaching stale loop device {loop_device} for {image_path.name}")
         run(["losetup", "-d", loop_device], check=False)
+
+
+def _attach_partition_loop_devices(context: AddonContext, image_path: Path) -> list[PartitionLoopDevice]:
+    partition_offsets = _read_partition_offsets(image_path)
+    partition_loop_devices: list[PartitionLoopDevice] = []
+
+    for number in (1, 2):
+        offset_bytes, size_bytes = partition_offsets.get(number, (0, 0))
+        if offset_bytes <= 0 or size_bytes <= 0:
+            raise HaPxeError(f"Image {image_path.name} is missing partition {number}")
+
+        loop_device = capture(
+            [
+                "losetup",
+                "--find",
+                "--show",
+                "--read-only",
+                "--offset",
+                str(offset_bytes),
+                "--sizelimit",
+                str(size_bytes),
+                str(image_path),
+            ]
+        )
+        if not loop_device:
+            raise HaPxeError(f"Failed to attach partition {number} from {image_path.name}")
+        if not _wait_for_block_device(loop_device):
+            raise HaPxeError(f"Loop device {loop_device} for partition {number} did not appear")
+
+        context.logger.debug(
+            f"Attached partition {number} from {image_path.name} to {loop_device} "
+            f"(offset={offset_bytes}, size={size_bytes})"
+        )
+        partition_loop_devices.append(PartitionLoopDevice(number=number, device=loop_device))
+
+    return partition_loop_devices
+
+
+def _read_partition_offsets(image_path: Path) -> dict[int, tuple[int, int]]:
+    output = capture(["partx", "-g", "--raw", "-o", "NR,START,SECTORS", str(image_path)])
+    partition_offsets: dict[int, tuple[int, int]] = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) != 3:
+            continue
+
+        try:
+            number = int(fields[0])
+            start_sector = int(fields[1])
+            sector_count = int(fields[2])
+        except ValueError:
+            continue
+
+        partition_offsets[number] = (start_sector * SECTOR_SIZE_BYTES, sector_count * SECTOR_SIZE_BYTES)
+
+    return partition_offsets
+
+
+def _partition_device(partition_loop_devices: list[PartitionLoopDevice], number: int) -> str:
+    for partition_loop_device in partition_loop_devices:
+        if partition_loop_device.number == number:
+            return partition_loop_device.device
+    raise HaPxeError(f"Attached loop device for partition {number} was not found")
 
 
 def _wait_for_block_device(path: str, attempts: int = 20) -> bool:
