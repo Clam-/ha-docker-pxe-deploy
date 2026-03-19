@@ -16,7 +16,6 @@ RUN apk add --no-cache \
     parted \
     python3 \
     rsync \
-    socat \
     shadow \
     util-linux \
     xz \

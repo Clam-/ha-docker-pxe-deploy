@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .log_format import format_log_line
+
 
 LOG_LEVELS = {"error": 0, "warn": 1, "info": 2, "debug": 3}
 
@@ -87,8 +89,7 @@ class AddonLogger:
     def _emit(self, level: str, message: str) -> None:
         if not self.should_log(level):
             return
-        prefix = {"error": "[ERROR]", "warn": "[WARN]", "debug": "[DEBUG]"}.get(level, "[INFO]")
-        print(f"{prefix} {message}", file=sys.stderr, flush=True)
+        print(format_log_line(level, message), file=sys.stderr, flush=True)
 
     def info(self, message: str) -> None:
         self._emit("info", message)
