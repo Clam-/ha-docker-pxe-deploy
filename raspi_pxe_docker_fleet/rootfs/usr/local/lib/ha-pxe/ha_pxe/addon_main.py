@@ -47,7 +47,7 @@ def main() -> int:
             provision_client(context, client, server_ip)
 
         start_nfs_server(context)
-        start_tftp_server(context)
+        start_tftp_server(context, server_ip)
         context.logger.warning(
             f"DHCP or ProxyDHCP is not included. Your network must direct PXE clients to {server_ip} for TFTP."
         )
@@ -111,4 +111,3 @@ def _wait_for_background_processes(context: AddonContext) -> None:
     finally:
         signal.signal(signal.SIGINT, previous_int)
         signal.signal(signal.SIGTERM, previous_term)
-

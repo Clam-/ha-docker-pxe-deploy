@@ -199,12 +199,13 @@ def start_nfs_server(context: AddonContext) -> None:
     context.logger.info("NFS exports are active")
 
 
-def start_tftp_server(context: AddonContext) -> None:
+def start_tftp_server(context: AddonContext, server_ip: str) -> None:
     command = [
         "dnsmasq",
         "--keep-in-foreground",
         "--port=0",
         "--enable-tftp",
+        f"--listen-address={server_ip}",
         f"--tftp-root={context.paths.tftp_dir}",
         "--tftp-no-fail",
         "--log-facility=-",
