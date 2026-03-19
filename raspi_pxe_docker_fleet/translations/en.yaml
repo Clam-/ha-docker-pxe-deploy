@@ -29,9 +29,14 @@ configuration:
       Optional locale name to apply on first boot. Leave blank to keep the
       image default. Examples: en_AU.UTF-8, en_US.UTF-8, de_DE.UTF-8. Locale
       list: https://sources.debian.org/src/glibc/2.31-11/localedata/SUPPORTED/
+  boot_config_lines:
+    name: Boot config lines
+    description: >-
+      Optional multiline entries to append into each client's main config.txt
+      on the exported boot partition. Example: dtparam=i2c_arm=on
   ssh_authorized_keys:
     name: SSH authorized keys
     description: Optional newline-separated public keys for the created user.
   clients:
     name: Raspberry Pi clients
-    description: Serial, model, hostname, optional image override, and per-client Docker workload definitions. The containers field supports simple line-based shorthands or a JSON array of detailed specs.
+    description: Serial, model, hostname, optional image override, optional per-client boot config lines, and per-client Docker workload definitions. The containers field supports simple line-based shorthands or a JSON array of detailed specs.

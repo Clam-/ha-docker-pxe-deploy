@@ -27,7 +27,7 @@ class LogFormatTests(unittest.TestCase):
             now=datetime(2026, 3, 19, 8, 9, 10, tzinfo=timezone.utc),
         )
 
-        self.assertEqual(line, "[2026-03-19 08:09:10+0000] [WARN] [ha-pxe] hello")
+        self.assertEqual(line, "[2026-03-19 08:09:10+0000] 🟡 [WARN] [ha-pxe] hello")
 
 
 class AddonLoggerTests(unittest.TestCase):
@@ -40,7 +40,7 @@ class AddonLoggerTests(unittest.TestCase):
 
         self.assertRegex(
             fake_stderr.getvalue().strip(),
-            re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{4}\] \[INFO\] configured$"),
+            re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{4}\] 🟢 \[INFO\] configured$"),
         )
 
 

@@ -16,6 +16,12 @@ _LEVEL_COLORS = {
     "debug": "\033[36m",
     "info": "\033[32m",
 }
+_LEVEL_ICONS = {
+    "error": "🔴",
+    "warn": "🟡",
+    "debug": "🔵",
+    "info": "🟢",
+}
 
 
 def format_timestamp(now: datetime | None = None) -> str:
@@ -46,6 +52,8 @@ def format_log_line(
     color_enabled = use_color() if color is None else color
     if color_enabled:
         level_label = f"{_LEVEL_COLORS[normalized_level]}{level_label}{_RESET}"
+    else:
+        level_label = f"{_LEVEL_ICONS[normalized_level]} {level_label}"
 
     parts = [f"[{timestamp}]", level_label]
     if name:

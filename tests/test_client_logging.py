@@ -74,7 +74,7 @@ class ClientLoggerTests(unittest.TestCase):
             fake_stderr.getvalue().strip(),
             re.compile(
                 r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{4}\] "
-                r"\[INFO\] \[ha-pxe-container-sync\] stage=reconcile status=started hello$"
+                r"🟢 \[INFO\] \[ha-pxe-container-sync\] stage=reconcile status=started hello$"
             ),
         )
 
@@ -130,7 +130,7 @@ class ClientLogRequestHandlerTests(unittest.TestCase):
             entry,
             re.compile(
                 r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[+-]\d{4}\] "
-                r"\[INFO\] \[ha-pxe-client-transport\] "
+                r"🟢 \[INFO\] \[ha-pxe-client-transport\] "
             ),
         )
         self.assertIn("[ha-pxe-client-transport]", entry)

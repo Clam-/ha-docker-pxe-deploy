@@ -57,6 +57,9 @@ CMDLINE_DROP_PREFIXES = (
 )
 
 CMDLINE_DROP_TOKENS = {"rootwait", "rw", "ro", "resize"}
+BOOT_CONFIG_MANAGED_START = "# HA-PXE managed config start"
+BOOT_CONFIG_MANAGED_END = "# HA-PXE managed config end"
+BOOT_CONFIG_RESET_SECTION = "[all]"
 
 
 def provision_client(context: AddonContext, client: dict[str, object], server_ip: str) -> None:
@@ -116,11 +119,26 @@ def provision_client(context: AddonContext, client: dict[str, object], server_ip
     else:
         _log_stage(context, "info", serial, "image", "skipped", "Reusing existing exported boot/root trees")
 
-    _log_stage(context, "info", serial, "boot-config", "started", "Writing kernel command line, fstab entries, and swap policy for network boot")
+    _log_stage(
+        context,
+        "info",
+        serial,
+        "boot-config",
+        "started",
+        "Writing kernel command line, main config.txt entries, fstab mounts, and swap policy for network boot",
+    )
     _rewrite_cmdline(context, boot_dir, server_ip, root_dir)
+    _rewrite_boot_config(context, boot_dir, client)
     _rewrite_fstab(root_dir, server_ip, boot_dir)
     _disable_swap_for_network_root(root_dir)
-    _log_stage(context, "info", serial, "boot-config", "completed", "PXE boot configuration updated and swap disabled for network-root clients")
+    _log_stage(
+        context,
+        "info",
+        serial,
+        "boot-config",
+        "completed",
+        "PXE boot configuration updated, managed main config.txt entries applied, and swap disabled for network-root clients",
+    )
 
     _log_stage(context, "info", serial, "bootstrap", "started", "Installing first-boot and container-sync bootstrap assets")
     _disable_stock_firstboot_services(root_dir)
@@ -156,6 +174,75 @@ def _rewrite_cmdline(context: AddonContext, boot_dir: Path, server_ip: str, root
     )
     atomic_write(boot_dir / "cmdline.txt", new_cmdline)
     context.logger.debug(f"Rewritten cmdline for {boot_dir}: {new_cmdline.strip()}")
+
+
+def _rewrite_boot_config(context: AddonContext, boot_dir: Path, client: dict[str, object]) -> None:
+    config_path = boot_dir / "config.txt"
+    managed_lines = _merge_boot_config_lines(
+        str(context.config.get("boot_config_lines", "") or ""),
+        str(client.get("boot_config_lines", "") or ""),
+    )
+
+    if not config_path.exists() and not managed_lines:
+        return
+
+    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    rendered = _render_boot_config(existing, managed_lines)
+    atomic_write(config_path, rendered)
+    context.logger.debug(f"Rewritten config.txt for {boot_dir} with {len(managed_lines)} managed line(s)")
+
+
+def _merge_boot_config_lines(*raw_values: str) -> list[str]:
+    merged: list[str] = []
+    for raw_value in raw_values:
+        for line in raw_value.splitlines():
+            normalized = line.strip()
+            if not normalized or normalized in merged:
+                continue
+            merged.append(normalized)
+    return merged
+
+
+def _render_boot_config(existing: str, managed_lines: list[str]) -> str:
+    output_lines: list[str] = []
+    in_managed_block = False
+    just_ended_managed_block = False
+
+    for raw_line in existing.splitlines():
+        stripped = raw_line.strip()
+        if stripped == BOOT_CONFIG_MANAGED_START:
+            in_managed_block = True
+            continue
+        if stripped == BOOT_CONFIG_MANAGED_END:
+            in_managed_block = False
+            just_ended_managed_block = True
+            continue
+        if not in_managed_block:
+            if just_ended_managed_block and not raw_line.strip() and output_lines and not output_lines[-1].strip():
+                just_ended_managed_block = False
+                continue
+            just_ended_managed_block = False
+            output_lines.append(raw_line)
+
+    while output_lines and not output_lines[-1].strip():
+        output_lines.pop()
+
+    if managed_lines:
+        if output_lines:
+            output_lines.append("")
+        output_lines.extend(
+            (
+                BOOT_CONFIG_MANAGED_START,
+                BOOT_CONFIG_RESET_SECTION,
+                *managed_lines,
+                BOOT_CONFIG_RESET_SECTION,
+                BOOT_CONFIG_MANAGED_END,
+            )
+        )
+
+    if not output_lines:
+        return ""
+    return "\n".join(output_lines) + "\n"
 
 
 def _rewrite_fstab(root_dir: Path, server_ip: str, boot_export: Path) -> None:
