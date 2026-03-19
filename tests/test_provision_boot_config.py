@@ -16,9 +16,9 @@ from ha_pxe.provision import _rewrite_boot_config
 
 
 class RewriteBootConfigTests(unittest.TestCase):
-    def _context(self, temp_dir: Path, boot_config_lines: str = "") -> AddonContext:
+    def _context(self, temp_dir: Path, boot_config_lines: str = "", enable_i2c: bool = False) -> AddonContext:
         context = AddonContext(paths=AddonPaths(root=temp_dir))
-        context._config_cache = {"boot_config_lines": boot_config_lines}
+        context._config_cache = {"boot_config_lines": boot_config_lines, "enable_i2c": enable_i2c}
         return context
 
     def test_rewrite_boot_config_appends_managed_block_to_main_config(self) -> None:
@@ -36,7 +36,7 @@ class RewriteBootConfigTests(unittest.TestCase):
             )
 
             context = self._context(temp_dir, " dtparam=i2c_arm=on \n")
-            _rewrite_boot_config(context, boot_dir, {"boot_config_lines": "dtparam=spi=on\ndtparam=i2c_arm=on\n"})
+            _rewrite_boot_config(context, boot_dir, {"boot_config_lines": "dtparam=spi=on\ndtparam=i2c_arm=on\n"}, False)
 
             self.assertEqual(
                 config_path.read_text(encoding="utf-8"),
@@ -46,7 +46,6 @@ class RewriteBootConfigTests(unittest.TestCase):
                 "dtoverlay=vc4-kms-v3d\n\n"
                 "# HA-PXE managed config start\n"
                 "[all]\n"
-                "dtparam=i2c_arm=on\n"
                 "dtparam=spi=on\n"
                 "[all]\n"
                 "# HA-PXE managed config end\n",
@@ -71,7 +70,7 @@ class RewriteBootConfigTests(unittest.TestCase):
             )
 
             context = self._context(temp_dir)
-            _rewrite_boot_config(context, boot_dir, {})
+            _rewrite_boot_config(context, boot_dir, {}, False)
 
             self.assertEqual(
                 config_path.read_text(encoding="utf-8"),
@@ -86,14 +85,14 @@ class RewriteBootConfigTests(unittest.TestCase):
             boot_dir = temp_dir / "boot"
             boot_dir.mkdir()
 
-            context = self._context(temp_dir, "dtparam=i2c_arm=on\n")
-            _rewrite_boot_config(context, boot_dir, {})
+            context = self._context(temp_dir, "dtparam=spi=on\n")
+            _rewrite_boot_config(context, boot_dir, {}, False)
 
             self.assertEqual(
                 (boot_dir / "config.txt").read_text(encoding="utf-8"),
                 "# HA-PXE managed config start\n"
                 "[all]\n"
-                "dtparam=i2c_arm=on\n"
+                "dtparam=spi=on\n"
                 "[all]\n"
                 "# HA-PXE managed config end\n",
             )
@@ -107,10 +106,56 @@ class RewriteBootConfigTests(unittest.TestCase):
             config_path.write_text("dtparam=audio=on\n", encoding="utf-8")
             os.chmod(config_path, 0o644)
 
-            context = self._context(temp_dir, "dtparam=i2c_arm=on\n")
-            _rewrite_boot_config(context, boot_dir, {})
+            context = self._context(temp_dir, "dtparam=spi=on\n")
+            _rewrite_boot_config(context, boot_dir, {}, False)
 
             self.assertEqual(config_path.stat().st_mode & 0o777, 0o644)
+
+    def test_rewrite_boot_config_uncomments_i2c_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            boot_dir = temp_dir / "boot"
+            boot_dir.mkdir()
+            config_path = boot_dir / "config.txt"
+            config_path.write_text(
+                "# Optional interfaces\n"
+                "#dtparam=i2c_arm=on\n"
+                "#dtparam=spi=on\n",
+                encoding="utf-8",
+            )
+
+            context = self._context(temp_dir, enable_i2c=True)
+            _rewrite_boot_config(context, boot_dir, {}, True)
+
+            self.assertEqual(
+                config_path.read_text(encoding="utf-8"),
+                "# Optional interfaces\n"
+                "dtparam=i2c_arm=on\n"
+                "#dtparam=spi=on\n",
+            )
+
+    def test_rewrite_boot_config_comments_i2c_alias_when_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            boot_dir = temp_dir / "boot"
+            boot_dir.mkdir()
+            config_path = boot_dir / "config.txt"
+            config_path.write_text(
+                "# Optional interfaces\n"
+                "dtparam=i2c\n"
+                "#dtparam=spi=on\n",
+                encoding="utf-8",
+            )
+
+            context = self._context(temp_dir, enable_i2c=False)
+            _rewrite_boot_config(context, boot_dir, {}, False)
+
+            self.assertEqual(
+                config_path.read_text(encoding="utf-8"),
+                "# Optional interfaces\n"
+                "#dtparam=i2c_arm=on\n"
+                "#dtparam=spi=on\n",
+            )
 
 
 if __name__ == "__main__":

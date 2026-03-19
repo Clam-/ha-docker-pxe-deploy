@@ -30,8 +30,9 @@ default_password: ""
 default_timezone: Australia/Melbourne
 default_keyboard_layout: us
 default_locale: en_AU.UTF-8
+enable_i2c: true
 boot_config_lines: |
-  dtparam=i2c_arm=on
+  dtoverlay=gpio-no-bank0-irq
 ssh_authorized_keys: |
   ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN lee@example-macbook
 clients:
@@ -40,8 +41,7 @@ clients:
     hostname: janky
     image_arch: arm64
     rebuild: false
-    boot_config_lines: |
-      dtparam=spi=on
+    enable_i2c: true
     containers: |
       [
         {
@@ -134,6 +134,7 @@ clients:
 - `default_timezone`: Optional IANA timezone name to apply on first boot.
 - `default_keyboard_layout`: Optional XKB keyboard layout code to apply on first boot.
 - `default_locale`: Optional locale name to apply on first boot.
+- `enable_i2c`: Optional boolean. If `true`, provisioning uncomments `dtparam=i2c_arm=on` in the main exported `config.txt` and ensures `i2c-dev` is present in `etc/modules-load.d/modules.conf`. If `false`, it comments that firmware entry and removes `i2c-dev`.
 - `boot_config_lines`: Optional multiline `config.txt` entries written into each client's exported main boot `config.txt`. These are applied in a managed block in the same boot partition the client later mounts at `/boot/firmware`.
 - `ssh_authorized_keys`: Optional newline-separated OpenSSH public keys.
 - `clients`: List of Raspberry Pi clients to provision.
@@ -168,6 +169,7 @@ Client fields:
 - `hostname`: Hostname written into the client root filesystem.
 - `image_arch`: `auto`, `armhf`, or `arm64`.
 - `rebuild`: If `true`, the client boot and root exports are recreated from a fresh Raspberry Pi OS Lite image on the next start.
+- `enable_i2c`: Optional per-client override for the global `enable_i2c` setting.
 - `boot_config_lines`: Optional additional multiline `config.txt` entries for just that client. Global `boot_config_lines` are applied first, then per-client lines are appended, and exact duplicate lines are removed.
 - `containers`: Either newline-separated image refs and remote source URLs, or a JSON array of container spec objects.
 
@@ -407,6 +409,7 @@ Recommended update patterns:
 - If two deployments would infer the same `name`, set explicit unique names in the JSON spec.
 - `depends_on` is only available in JSON mode. It controls reconcile/start order only; it does not wait for health checks or auto-create missing containers.
 - The client root filesystem is stored under `/data`, so client state survives add-on restarts.
-- Managed boot config entries are written into the exported boot partition's main `config.txt`, not an included fragment, so settings like `dtparam=i2c_arm=on` are available from both TFTP boot and the later `/boot/firmware` NFS mount.
+- When `enable_i2c` is set, provisioning manages both the exported boot partition's main `config.txt` and `etc/modules-load.d/modules.conf` in the exported rootfs so the firmware setting and `i2c-dev` module stay in sync.
+- Managed boot config entries are written into the exported boot partition's main `config.txt`, not an included fragment, so custom settings remain available from both TFTP boot and the later `/boot/firmware` NFS mount.
 - Raspberry Pi 2 v1.2, Pi 3, and CM3-class network boot first request `/bootcode.bin` from the TFTP root, then typically probe `/bootsig.bin`.
 - Raspberry Pi 4, 400, CM4, Pi 5, 500, and CM5 use the EEPROM bootloader instead of `bootcode.bin`.

@@ -1,5 +1,5 @@
 name: Raspberry Pi PXE Docker Fleet
-version: "0.10.4"
+version: "0.10.5"
 slug: raspi_pxe_docker_fleet
 description: Provision Raspberry Pi PXE clients with per-client NFS roots and Docker workloads.
 url: https://github.com/Clam-/ha-docker-pxe-deploy
@@ -29,6 +29,7 @@ options:
   default_timezone: ""
   default_keyboard_layout: ""
   default_locale: ""
+  enable_i2c: false
   boot_config_lines: ""
   ssh_authorized_keys: ""
   clients: []
@@ -40,6 +41,7 @@ schema:
   default_timezone: "str?"
   default_keyboard_layout: "str?"
   default_locale: "str?"
+  enable_i2c: "bool?"
   boot_config_lines: "str?"
   ssh_authorized_keys: "str?"
   clients:
@@ -48,5 +50,6 @@ schema:
       hostname: "match(^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$)"
       image_arch: "list(auto|armhf|arm64)?"
       rebuild: "bool?"
+      enable_i2c: "bool?"
       boot_config_lines: "str?"
       containers: "str?"

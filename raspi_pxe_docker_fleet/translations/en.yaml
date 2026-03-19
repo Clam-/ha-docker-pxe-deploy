@@ -29,6 +29,12 @@ configuration:
       Optional locale name to apply on first boot. Leave blank to keep the
       image default. Examples: en_AU.UTF-8, en_US.UTF-8, de_DE.UTF-8. Locale
       list: https://sources.debian.org/src/glibc/2.31-11/localedata/SUPPORTED/
+  enable_i2c:
+    name: Enable I2C
+    description: >-
+      If enabled, provisioning will uncomment dtparam=i2c_arm=on in the main
+      firmware config and ensure i2c-dev is present in modules.conf. If
+      disabled, it will comment that firmware entry and remove i2c-dev.
   boot_config_lines:
     name: Boot config lines
     description: >-
@@ -39,4 +45,4 @@ configuration:
     description: Optional newline-separated public keys for the created user.
   clients:
     name: Raspberry Pi clients
-    description: Serial, model, hostname, optional image override, optional per-client boot config lines, and per-client Docker workload definitions. The containers field supports simple line-based shorthands or a JSON array of detailed specs.
+    description: Serial, model, hostname, optional image override, optional per-client I2C override, optional per-client boot config lines, and per-client Docker workload definitions. The containers field supports simple line-based shorthands or a JSON array of detailed specs.
