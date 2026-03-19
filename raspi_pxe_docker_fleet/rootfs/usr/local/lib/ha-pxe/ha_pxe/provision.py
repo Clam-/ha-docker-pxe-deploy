@@ -279,6 +279,7 @@ def _disable_stock_firstboot_services(root_dir: Path) -> None:
     ensure_directory(root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants")
     replace_symlink(root_dir / "etc" / "systemd" / "system" / "userconfig.service", "/dev/null")
     replace_symlink(root_dir / "etc" / "systemd" / "system" / "systemd-firstboot.service", "/dev/null")
+    replace_symlink(root_dir / "etc" / "systemd" / "system" / "systemd-networkd-wait-online.service", "/dev/null")
     (root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants" / "userconfig.service").unlink(missing_ok=True)
     (root_dir / "etc" / "ssh" / "sshd_config.d" / "rename_user.conf").unlink(missing_ok=True)
     banner_path = root_dir / "usr" / "share" / "userconf-pi" / "sshd_banner"
