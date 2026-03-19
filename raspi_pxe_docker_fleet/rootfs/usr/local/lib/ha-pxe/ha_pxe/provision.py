@@ -262,7 +262,7 @@ def _rewrite_fstab(root_dir: Path, server_ip: str, boot_export: Path) -> None:
         if mount_point in {"/", "/boot", "/boot/firmware"} or fs_type == "swap":
             continue
         output_lines.append(raw_line)
-    output_lines.append(f"{server_ip}:{boot_export} /boot/firmware nfs defaults,vers=3,tcp,nolock,_netdev 0 0")
+    output_lines.append(f"{server_ip}:{boot_export} /boot/firmware nfs defaults,vers=3,tcp,nolock,_netdev,addr={server_ip} 0 0")
     atomic_write(fstab_path, "\n".join(output_lines) + "\n")
 
 
