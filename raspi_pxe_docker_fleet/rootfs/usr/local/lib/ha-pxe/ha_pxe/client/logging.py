@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import socket
+import http.client
 import sys
 import traceback
 from dataclasses import dataclass
 
+from ..log_format import format_log_line
 from ..text import sanitize_message, sanitize_token
 from .bootstrap import BootstrapConfig
 
@@ -22,7 +23,7 @@ class ClientLogger:
     def emit_local(self, level: str, stage: str, status: str, message: str) -> None:
         clean = sanitize_message(message)
         print(
-            f"[{self.prefix}] level={level} stage={stage} status={status} {clean}",
+            format_log_line(level, f"stage={stage} status={status} {clean}", name=self.prefix),
             file=sys.stderr,
             flush=True,
         )
@@ -32,42 +33,44 @@ class ClientLogger:
             return True
 
         body = sanitize_message(message)
-        body_bytes = body.encode("utf-8")
-        headers = [
-            f"POST {self.config.log_path} HTTP/1.1",
-            f"Host: {self.config.log_host}:{self.config.log_port}",
-            "Connection: close",
-            "Content-Type: text/plain; charset=utf-8",
-            f"Content-Length: {len(body_bytes)}",
-            f"X-Ha-Pxe-Source: {self.source}",
-            f"X-Ha-Pxe-Level: {level}",
-            f"X-Ha-Pxe-Stage: {stage}",
-            f"X-Ha-Pxe-Status: {status}",
-            f"X-Ha-Pxe-Hostname: {self.config.hostname}",
-            f"X-Ha-Pxe-Serial: {self.config.serial}",
-        ]
+        headers = {
+            "Connection": "close",
+            "Content-Type": "text/plain; charset=utf-8",
+            "X-Ha-Pxe-Source": self.source,
+            "X-Ha-Pxe-Level": level,
+            "X-Ha-Pxe-Stage": stage,
+            "X-Ha-Pxe-Status": status,
+            "X-Ha-Pxe-Hostname": self.config.hostname,
+            "X-Ha-Pxe-Serial": self.config.serial,
+        }
         if exit_code:
-            headers.append(f"X-Ha-Pxe-Exit-Code: {exit_code}")
-        request = ("\r\n".join(headers) + "\r\n\r\n").encode("utf-8") + body_bytes
+            headers["X-Ha-Pxe-Exit-Code"] = exit_code
 
+        connection: http.client.HTTPConnection | None = None
         try:
-            with socket.create_connection((self.config.log_host, self.config.log_port), timeout=3) as sock:
-                sock.sendall(request)
-                status_line = b""
-                while not status_line.endswith(b"\n"):
-                    chunk = sock.recv(1)
-                    if not chunk:
-                        break
-                    status_line += chunk
-                if b" 204 " in status_line or b" 200 " in status_line:
-                    self.remote_failure_reported = False
-                    return True
-        except OSError:
+            connection = http.client.HTTPConnection(self.config.log_host, self.config.log_port, timeout=3)
+            connection.request("POST", self.config.log_path, body=body.encode("utf-8"), headers=headers)
+            response = connection.getresponse()
+            response.read()
+            if response.status in {200, 204}:
+                self.remote_failure_reported = False
+                return True
+        except (OSError, http.client.HTTPException):
             pass
+        finally:
+            if connection is not None:
+                connection.close()
 
         if not self.remote_failure_reported:
             print(
-                f"[{self.prefix}] level=warn stage=transport status=degraded Unable to reach add-on log transport at {self.config.log_host}:{self.config.log_port}{self.config.log_path}",
+                format_log_line(
+                    "warn",
+                    (
+                        "stage=transport status=degraded "
+                        f"Unable to reach add-on log transport at {self.config.log_host}:{self.config.log_port}{self.config.log_path}"
+                    ),
+                    name=self.prefix,
+                ),
                 file=sys.stderr,
                 flush=True,
             )
@@ -120,4 +123,3 @@ class ClientLogger:
             message = str(exc)
         exit_code = str(getattr(exc, "returncode", 1))
         self.stage_fail(self.current_stage, message, exit_code)
-

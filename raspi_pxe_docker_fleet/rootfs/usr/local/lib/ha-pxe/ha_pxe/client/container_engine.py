@@ -171,7 +171,12 @@ def ensure_desired_image(spec: dict[str, Any], key: str, state_dir: Path, logger
     image_name = str(spec["image"])
     if source_type == "image":
         logger.info(f"Pulling {image_name}")
-        run(["docker", "pull", image_name])
+        completed = run(["docker", "pull", image_name], check=False, capture_output=True)
+        if completed.returncode != 0:
+            detail = _command_failure_detail(completed.stdout, completed.stderr)
+            if detail:
+                raise HaPxeError(f"Failed to pull {image_name}: {detail}")
+            raise HaPxeError(f"Failed to pull {image_name}: docker pull exited with status {completed.returncode}")
         logger.info(f"Pulled {image_name} successfully")
         image_id = _docker_image_inspect(image_name, "{{.Id}}")
         if not image_id:
@@ -420,3 +425,8 @@ def _capture_optional(command: list[str]) -> str:
     if completed.returncode != 0:
         return ""
     return (completed.stdout or "").strip()
+
+
+def _command_failure_detail(stdout: str, stderr: str) -> str:
+    detail = sanitize_message(stderr) or sanitize_message(stdout)
+    return detail

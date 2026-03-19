@@ -171,7 +171,17 @@ def start_client_log_transport(context: AddonContext) -> None:
     port = str(context.paths.client_log_port)
     script_path = context.paths.library_dir / "client-log-server.py"
     context.logger.debug(f"Starting client log transport listener on TCP {port}{context.paths.client_log_path}")
-    process = spawn(["socat", f"TCP-LISTEN:{port},reuseaddr,fork", f"EXEC:{script_path}"])
+    process = spawn(
+        [
+            str(script_path),
+            "--host",
+            "0.0.0.0",
+            "--port",
+            port,
+            "--path",
+            context.paths.client_log_path,
+        ]
+    )
     time.sleep(1)
     if process.poll() is not None:
         raise HaPxeError(f"Client log transport failed to start on TCP {port}{context.paths.client_log_path}")
