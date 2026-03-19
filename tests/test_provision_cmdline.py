@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import unittest
@@ -37,6 +38,20 @@ class RewriteCmdlineTests(unittest.TestCase):
                 "nfsroot=192.0.2.10:/data/exports/test-client/root,vers=3,tcp,nolock "
                 "rw ip=dhcp rootwait\n",
             )
+
+    def test_rewrite_cmdline_preserves_existing_file_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            boot_dir = temp_dir / "boot"
+            boot_dir.mkdir()
+            cmdline_path = boot_dir / "cmdline.txt"
+            cmdline_path.write_text("console=serial0,115200 root=/dev/mmcblk0p2\n", encoding="utf-8")
+            os.chmod(cmdline_path, 0o644)
+
+            context = AddonContext(paths=AddonPaths(root=temp_dir))
+            _rewrite_cmdline(context, boot_dir, "192.0.2.10", Path("/data/exports/test-client/root"))
+
+            self.assertEqual(cmdline_path.stat().st_mode & 0o777, 0o644)
 
 
 if __name__ == "__main__":

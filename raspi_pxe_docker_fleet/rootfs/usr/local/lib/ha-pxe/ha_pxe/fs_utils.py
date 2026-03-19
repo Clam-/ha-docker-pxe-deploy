@@ -14,6 +14,8 @@ def ensure_directory(path: Path) -> None:
 
 def atomic_write(path: Path, data: str, mode: int | None = None) -> None:
     ensure_directory(path.parent)
+    if mode is None and path.exists():
+        mode = path.stat().st_mode & 0o777
     with tempfile.NamedTemporaryFile("w", delete=False, dir=path.parent, encoding="utf-8") as handle:
         handle.write(data)
         tmp_name = handle.name
@@ -52,4 +54,3 @@ def copy_tree(src: Path, dst: Path) -> None:
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
-
