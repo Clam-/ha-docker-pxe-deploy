@@ -29,6 +29,8 @@ NFS_MOUNTD_PORT = "32767"
 NFS_STATD_PORT = "32765"
 NFS_STATD_OUTGOING_PORT = "32766"
 NFS_LOCKD_PORT = "32768"
+NFS_START_MAX_ATTEMPTS = 10
+NFS_START_RETRY_DELAY_SECONDS = 3
 
 
 def ensure_directories(context: AddonContext) -> None:
@@ -270,27 +272,42 @@ def _tftp_mounts(context: AddonContext) -> list[str]:
 
 def _start_nfs_threads(context: AddonContext, server_ip: str) -> None:
     command = _nfsd_command(context, server_ip)
-    completed = run(command, check=False, capture_output=True)
-    if completed.returncode == 0:
-        return
+    completed: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(1, NFS_START_MAX_ATTEMPTS + 1):
+        completed = run(command, check=False, capture_output=True)
+        if completed.returncode == 0:
+            return
 
-    detail = _command_output(completed)
-    if detail:
-        context.logger.warning(
-            f"rpc.nfsd failed on the first attempt; resetting NFS state and retrying once ({detail})"
-        )
-    else:
-        context.logger.warning("rpc.nfsd failed on the first attempt; resetting NFS state and retrying once")
+        detail = _command_output(completed)
+        if attempt == 1:
+            if detail:
+                context.logger.warning(
+                    f"rpc.nfsd failed on the first attempt; resetting NFS state and retrying for up to "
+                    f"{(NFS_START_MAX_ATTEMPTS - 1) * NFS_START_RETRY_DELAY_SECONDS} more second(s) ({detail})"
+                )
+            else:
+                context.logger.warning(
+                    f"rpc.nfsd failed on the first attempt; resetting NFS state and retrying for up to "
+                    f"{(NFS_START_MAX_ATTEMPTS - 1) * NFS_START_RETRY_DELAY_SECONDS} more second(s)"
+                )
+        elif attempt < NFS_START_MAX_ATTEMPTS and detail:
+            context.logger.debug(f"rpc.nfsd attempt {attempt} failed; retrying ({detail})")
+        elif attempt < NFS_START_MAX_ATTEMPTS:
+            context.logger.debug(f"rpc.nfsd attempt {attempt} failed; retrying")
 
-    _reset_nfs_server_state(context)
-    run(["exportfs", "-ra"])
-    completed = run(command, check=False, capture_output=True)
-    if completed.returncode != 0:
-        diagnostics = _nfs_start_diagnostics()
-        stderr = completed.stderr or completed.stdout or ""
-        if diagnostics:
-            stderr = f"{stderr}\n{diagnostics}".strip()
-        raise CommandError(command, completed.returncode, stderr)
+        if attempt == NFS_START_MAX_ATTEMPTS:
+            break
+
+        _reset_nfs_server_state(context)
+        run(["exportfs", "-ra"])
+        time.sleep(NFS_START_RETRY_DELAY_SECONDS)
+
+    assert completed is not None
+    diagnostics = _nfs_start_diagnostics()
+    stderr = completed.stderr or completed.stdout or ""
+    if diagnostics:
+        stderr = f"{stderr}\n{diagnostics}".strip()
+    raise CommandError(command, completed.returncode, stderr)
 
 
 def _reset_nfs_server_state(context: AddonContext, *, unmount: bool = False) -> None:
