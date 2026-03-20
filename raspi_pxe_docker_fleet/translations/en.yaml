@@ -5,6 +5,9 @@ configuration:
   server_ip:
     name: Server IP
     description: Optional override for the Home Assistant host IP used in TFTP and NFS paths.
+  mqtt_host_suffix:
+    name: MQTT host suffix
+    description: Optional DNS suffix appended to MQTT_HOST and MQTT_BROKER when the Home Assistant host name is not already fully qualified.
   default_username:
     name: Default username
     description: Linux username to create on each Raspberry Pi during first boot.
