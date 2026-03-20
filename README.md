@@ -104,7 +104,8 @@ Preferred agent behavior when generating configs:
   runtime mechanism for this add-on.
 - Child containers receive MQTT defaults automatically: `MQTT_PORT`,
   `MQTT_USERNAME`, and `MQTT_PASSWORD` from the Home Assistant MQTT service,
-  plus `MQTT_BROKER` and `MQTT_HOST` from the Home Assistant host hostname
+  plus `MQTT_BROKER` and `MQTT_HOST` from the Home Assistant host hostname,
+  qualified with the first DNS search suffix from `/etc/resolv.conf` when needed
   when available. Explicit `env` values still win.
 
 For the thermostat example, the correct agent output is a JSON `containers`

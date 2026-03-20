@@ -149,6 +149,33 @@ class AddonContext:
         hostname = data.get("hostname")
         return str(hostname) if hostname else ""
 
+    def dns_search_suffix(self) -> str:
+        try:
+            lines = Path("/etc/resolv.conf").read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return ""
+
+        for raw_line in lines:
+            line = raw_line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            if parts[0] in {"search", "domain"}:
+                return parts[1].rstrip(".")
+        return ""
+
+    def qualified_host_hostname(self) -> str:
+        hostname = self.host_hostname().strip().rstrip(".")
+        if not hostname or "." in hostname:
+            return hostname
+
+        suffix = self.dns_search_suffix()
+        if not suffix:
+            return hostname
+        return f"{hostname}.{suffix}"
+
     def service_info(self, service: str) -> dict[str, Any]:
         response = self.supervisor_api(f"/services/{service}")
         if not response:
@@ -158,7 +185,7 @@ class AddonContext:
 
     def mqtt_env_defaults(self) -> dict[str, str]:
         info = self.service_info("mqtt")
-        host = self.host_hostname()
+        host = self.qualified_host_hostname()
         port = str(info.get("port", "") or "")
         username = str(info.get("username", "") or "")
         password = str(info.get("password", "") or "")

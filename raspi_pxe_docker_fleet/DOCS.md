@@ -199,7 +199,7 @@ Top-level container fields:
 - `command`: Optional string or array appended after the image name.
 - `files`: Array of generated files to materialize on the client and bind-mount into the container.
 
-Each child container also receives MQTT defaults when the MQTT service is configured for the add-on. The add-on injects `MQTT_PORT`, `MQTT_USERNAME`, and `MQTT_PASSWORD` from the Home Assistant MQTT service. It also injects `MQTT_BROKER` and `MQTT_HOST` using the Home Assistant host hostname from the Supervisor host API. Explicit `env` entries in a container spec override those defaults. If the host hostname is unavailable, `MQTT_BROKER` and `MQTT_HOST` are left unset.
+Each child container also receives MQTT defaults when the MQTT service is configured for the add-on. The add-on injects `MQTT_PORT`, `MQTT_USERNAME`, and `MQTT_PASSWORD` from the Home Assistant MQTT service. It also injects `MQTT_BROKER` and `MQTT_HOST` using the Home Assistant host hostname from the Supervisor host API, qualified with the first DNS search suffix from `/etc/resolv.conf` when the hostname is not already fully qualified. Explicit `env` entries in a container spec override those defaults. If the host hostname is unavailable, `MQTT_BROKER` and `MQTT_HOST` are left unset.
 
 `source` object fields:
 
