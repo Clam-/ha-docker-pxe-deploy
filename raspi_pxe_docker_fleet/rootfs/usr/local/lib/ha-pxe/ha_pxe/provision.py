@@ -60,8 +60,10 @@ CMDLINE_DROP_TOKENS = {"rootwait", "rw", "ro", "resize"}
 BOOT_CONFIG_MANAGED_START = "# HA-PXE managed config start"
 BOOT_CONFIG_MANAGED_END = "# HA-PXE managed config end"
 BOOT_CONFIG_RESET_SECTION = "[all]"
-I2C_CONFIG_ENABLED_LINE = "dtparam=i2c_arm=on"
-I2C_CONFIG_DISABLED_LINE = f"#{I2C_CONFIG_ENABLED_LINE}"
+I2C_ARM_CONFIG_ENABLED_LINE = "dtparam=i2c_arm=on"
+I2C_ARM_CONFIG_DISABLED_LINE = f"#{I2C_ARM_CONFIG_ENABLED_LINE}"
+I2C_VC_CONFIG_ENABLED_LINE = "dtparam=i2c_vc=on"
+I2C_VC_CONFIG_DISABLED_LINE = f"#{I2C_VC_CONFIG_ENABLED_LINE}"
 I2C_MODULE_LINE = "i2c-dev"
 
 
@@ -123,6 +125,7 @@ def provision_client(context: AddonContext, client: dict[str, object], server_ip
         _log_stage(context, "info", serial, "image", "skipped", "Reusing existing exported boot/root trees")
 
     enable_i2c = _resolve_bool_option(context.config.get("enable_i2c", False), client.get("enable_i2c"))
+    enable_i2c_vc = _resolve_bool_option(context.config.get("enable_i2c_vc", False), client.get("enable_i2c_vc"))
     _log_stage(
         context,
         "info",
@@ -132,8 +135,8 @@ def provision_client(context: AddonContext, client: dict[str, object], server_ip
         "Writing kernel command line, main config.txt entries, kernel module defaults, fstab mounts, and swap policy for network boot",
     )
     _rewrite_cmdline(context, boot_dir, server_ip, root_dir)
-    _rewrite_boot_config(context, boot_dir, client, enable_i2c)
-    _rewrite_modules_conf(context, root_dir, enable_i2c)
+    _rewrite_boot_config(context, boot_dir, client, enable_i2c, enable_i2c_vc)
+    _rewrite_modules_conf(context, root_dir, enable_i2c or enable_i2c_vc)
     _rewrite_fstab(root_dir, server_ip, boot_dir)
     _disable_swap_for_network_root(root_dir)
     _log_stage(
@@ -189,7 +192,13 @@ def _resolve_bool_option(global_value: object, client_value: object) -> bool:
     return False
 
 
-def _rewrite_boot_config(context: AddonContext, boot_dir: Path, client: dict[str, object], enable_i2c: bool) -> None:
+def _rewrite_boot_config(
+    context: AddonContext,
+    boot_dir: Path,
+    client: dict[str, object],
+    enable_i2c: bool,
+    enable_i2c_vc: bool,
+) -> None:
     config_path = boot_dir / "config.txt"
     managed_lines = [
         line
@@ -197,14 +206,14 @@ def _rewrite_boot_config(context: AddonContext, boot_dir: Path, client: dict[str
             str(context.config.get("boot_config_lines", "") or ""),
             str(client.get("boot_config_lines", "") or ""),
         )
-        if not _is_i2c_config_line(line)
+        if not _is_managed_i2c_config_line(line)
     ]
 
-    if not config_path.exists() and not managed_lines and not enable_i2c:
+    if not config_path.exists() and not managed_lines and not enable_i2c and not enable_i2c_vc:
         return
 
     existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-    rendered = _render_boot_config(existing, managed_lines, enable_i2c)
+    rendered = _render_boot_config(existing, managed_lines, enable_i2c, enable_i2c_vc)
     atomic_write(config_path, rendered)
     context.logger.debug(f"Rewritten config.txt for {boot_dir} with {len(managed_lines)} managed line(s)")
 
@@ -220,7 +229,7 @@ def _merge_boot_config_lines(*raw_values: str) -> list[str]:
     return merged
 
 
-def _is_i2c_config_line(line: str) -> bool:
+def _is_i2c_arm_config_line(line: str) -> bool:
     normalized = line.strip().removeprefix("#").strip()
     return normalized in {
         "dtparam=i2c",
@@ -232,12 +241,27 @@ def _is_i2c_config_line(line: str) -> bool:
     }
 
 
-def _render_boot_config(existing: str, managed_lines: list[str], enable_i2c: bool) -> str:
+def _is_i2c_vc_config_line(line: str) -> bool:
+    normalized = line.strip().removeprefix("#").strip()
+    return normalized in {
+        "dtparam=i2c_vc",
+        "dtparam=i2c_vc=on",
+        "dtparam=i2c_vc=off",
+    }
+
+
+def _is_managed_i2c_config_line(line: str) -> bool:
+    return _is_i2c_arm_config_line(line) or _is_i2c_vc_config_line(line)
+
+
+def _render_boot_config(existing: str, managed_lines: list[str], enable_i2c: bool, enable_i2c_vc: bool) -> str:
     output_lines: list[str] = []
     in_managed_block = False
     just_ended_managed_block = False
-    i2c_line = I2C_CONFIG_ENABLED_LINE if enable_i2c else I2C_CONFIG_DISABLED_LINE
-    i2c_line_written = False
+    i2c_arm_line = I2C_ARM_CONFIG_ENABLED_LINE if enable_i2c else I2C_ARM_CONFIG_DISABLED_LINE
+    i2c_vc_line = I2C_VC_CONFIG_ENABLED_LINE if enable_i2c_vc else I2C_VC_CONFIG_DISABLED_LINE
+    i2c_arm_line_written = False
+    i2c_vc_line_written = False
 
     for raw_line in existing.splitlines():
         stripped = raw_line.strip()
@@ -249,10 +273,16 @@ def _render_boot_config(existing: str, managed_lines: list[str], enable_i2c: boo
             just_ended_managed_block = True
             continue
         if not in_managed_block:
-            if _is_i2c_config_line(stripped):
-                if not i2c_line_written:
-                    output_lines.append(i2c_line)
-                    i2c_line_written = True
+            if _is_i2c_arm_config_line(stripped):
+                if not i2c_arm_line_written:
+                    output_lines.append(i2c_arm_line)
+                    i2c_arm_line_written = True
+                just_ended_managed_block = False
+                continue
+            if _is_i2c_vc_config_line(stripped):
+                if not i2c_vc_line_written:
+                    output_lines.append(i2c_vc_line)
+                    i2c_vc_line_written = True
                 just_ended_managed_block = False
                 continue
             if just_ended_managed_block and not raw_line.strip() and output_lines and not output_lines[-1].strip():
@@ -264,10 +294,15 @@ def _render_boot_config(existing: str, managed_lines: list[str], enable_i2c: boo
     while output_lines and not output_lines[-1].strip():
         output_lines.pop()
 
-    if not i2c_line_written and enable_i2c:
+    if not i2c_arm_line_written and enable_i2c:
         if output_lines and output_lines[-1].strip():
             output_lines.append("")
-        output_lines.append(i2c_line)
+        output_lines.append(i2c_arm_line)
+
+    if not i2c_vc_line_written and enable_i2c_vc:
+        if output_lines and output_lines[-1].strip():
+            output_lines.append("")
+        output_lines.append(i2c_vc_line)
 
     if managed_lines:
         if output_lines:
@@ -287,9 +322,9 @@ def _render_boot_config(existing: str, managed_lines: list[str], enable_i2c: boo
     return "\n".join(output_lines) + "\n"
 
 
-def _rewrite_modules_conf(context: AddonContext, root_dir: Path, enable_i2c: bool) -> None:
+def _rewrite_modules_conf(context: AddonContext, root_dir: Path, load_i2c_dev: bool) -> None:
     modules_path = root_dir / "etc" / "modules-load.d" / "modules.conf"
-    if not modules_path.exists() and not enable_i2c:
+    if not modules_path.exists() and not load_i2c_dev:
         return
 
     output_lines: list[str] = []
@@ -298,13 +333,13 @@ def _rewrite_modules_conf(context: AddonContext, root_dir: Path, enable_i2c: boo
 
     for raw_line in existing_lines:
         if raw_line.strip() == I2C_MODULE_LINE:
-            if enable_i2c and not i2c_module_written:
+            if load_i2c_dev and not i2c_module_written:
                 output_lines.append(I2C_MODULE_LINE)
                 i2c_module_written = True
             continue
         output_lines.append(raw_line)
 
-    if enable_i2c and not i2c_module_written:
+    if load_i2c_dev and not i2c_module_written:
         output_lines.append(I2C_MODULE_LINE)
 
     output_text = "\n".join(output_lines)
@@ -312,7 +347,7 @@ def _rewrite_modules_conf(context: AddonContext, root_dir: Path, enable_i2c: boo
         output_text += "\n"
 
     atomic_write(modules_path, output_text, 0o644 if not modules_path.exists() else None)
-    context.logger.debug(f"Rewritten modules.conf for {root_dir} with i2c {'enabled' if enable_i2c else 'disabled'}")
+    context.logger.debug(f"Rewritten modules.conf for {root_dir} with i2c-dev {'enabled' if load_i2c_dev else 'disabled'}")
 
 
 def _rewrite_fstab(root_dir: Path, server_ip: str, boot_export: Path) -> None:

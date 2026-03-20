@@ -33,8 +33,15 @@ configuration:
     name: Enable I2C
     description: >-
       If enabled, provisioning will uncomment dtparam=i2c_arm=on in the main
-      firmware config and ensure i2c-dev is present in modules.conf. If
-      disabled, it will comment that firmware entry and remove i2c-dev.
+      firmware config. The i2c-dev module is kept present whenever either
+      enable_i2c or enable_i2c_vc is enabled.
+  enable_i2c_vc:
+    name: Enable I2C VC
+    description: >-
+      If enabled, provisioning will uncomment dtparam=i2c_vc=on in the main
+      firmware config so the VC bus can appear as /dev/i2c-0, and it will
+      keep i2c-dev present. If both enable_i2c and enable_i2c_vc are disabled,
+      provisioning removes i2c-dev from modules.conf.
   boot_config_lines:
     name: Boot config lines
     description: >-
@@ -45,4 +52,4 @@ configuration:
     description: Optional newline-separated public keys for the created user.
   clients:
     name: Raspberry Pi clients
-    description: Serial, model, hostname, optional image override, optional per-client I2C override, optional per-client boot config lines, and per-client Docker workload definitions. The containers field supports simple line-based shorthands or a JSON array of detailed specs.
+    description: Serial, model, hostname, optional image override, optional per-client I2C overrides, optional per-client boot config lines, and per-client Docker workload definitions. The containers field supports simple line-based shorthands or a JSON array of detailed specs.

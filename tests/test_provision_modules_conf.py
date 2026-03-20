@@ -65,6 +65,22 @@ class RewriteModulesConfTests(unittest.TestCase):
 
             self.assertEqual(modules_path.stat().st_mode & 0o777, 0o644)
 
+    def test_rewrite_modules_conf_adds_i2c_dev_when_vc_bus_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            root_dir = temp_dir / "root"
+            modules_dir = root_dir / "etc" / "modules-load.d"
+            modules_dir.mkdir(parents=True)
+            modules_path = modules_dir / "modules.conf"
+            modules_path.write_text("# Existing modules\nsnd_bcm2835\n", encoding="utf-8")
+
+            _rewrite_modules_conf(self._context(temp_dir), root_dir, True)
+
+            self.assertEqual(
+                modules_path.read_text(encoding="utf-8"),
+                "# Existing modules\nsnd_bcm2835\ni2c-dev\n",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

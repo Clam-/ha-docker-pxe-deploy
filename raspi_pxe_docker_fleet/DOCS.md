@@ -31,6 +31,7 @@ default_timezone: Australia/Melbourne
 default_keyboard_layout: us
 default_locale: en_AU.UTF-8
 enable_i2c: true
+enable_i2c_vc: true
 boot_config_lines: |
   dtoverlay=gpio-no-bank0-irq
 ssh_authorized_keys: |
@@ -62,9 +63,10 @@ clients:
             "8889:8889"
           ],
           "devices": [
-            "/dev/gpiochip0:/dev/gpiochip0",
-            "/dev/i2c-1:/dev/i2c-1",
-            "/dev/i2c-2:/dev/i2c-2"
+            "/dev/gpiochip0:/dev/gpiochip0:rwm",
+            "/dev/i2c-0:/dev/i2c-0:rwm",
+            "/dev/i2c-1:/dev/i2c-1:rwm",
+            "/dev/i2c-2:/dev/i2c-2:rwm"
           ]
         },
         {
@@ -121,7 +123,8 @@ clients:
 - `default_timezone`: Optional IANA timezone name to apply on first boot.
 - `default_keyboard_layout`: Optional XKB keyboard layout code to apply on first boot.
 - `default_locale`: Optional locale name to apply on first boot.
-- `enable_i2c`: Optional boolean. If `true`, provisioning uncomments `dtparam=i2c_arm=on` in the main exported `config.txt` and ensures `i2c-dev` is present in `etc/modules-load.d/modules.conf`. If `false`, it comments that firmware entry and removes `i2c-dev`.
+- `enable_i2c`: Optional boolean. If `true`, provisioning uncomments `dtparam=i2c_arm=on` in the main exported `config.txt`. If `false`, it comments that firmware entry. The `i2c-dev` module is kept present whenever either `enable_i2c` or `enable_i2c_vc` is enabled.
+- `enable_i2c_vc`: Optional boolean. If `true`, provisioning uncomments `dtparam=i2c_vc=on` in the main exported `config.txt`, which allows the VC bus to appear as `/dev/i2c-0`. If `false`, it comments that firmware entry. If both `enable_i2c` and `enable_i2c_vc` are `false`, provisioning removes `i2c-dev` from `etc/modules-load.d/modules.conf`.
 - `boot_config_lines`: Optional multiline `config.txt` entries written into each client's exported main boot `config.txt`. These are applied in a managed block in the same boot partition the client later mounts at `/boot/firmware`.
 - `ssh_authorized_keys`: Optional newline-separated OpenSSH public keys.
 - `clients`: List of Raspberry Pi clients to provision.
@@ -157,6 +160,7 @@ Client fields:
 - `image_arch`: `auto`, `armhf`, or `arm64`.
 - `rebuild`: If `true`, the client boot and root exports are recreated from a fresh Raspberry Pi OS Lite image on the next start.
 - `enable_i2c`: Optional per-client override for the global `enable_i2c` setting.
+- `enable_i2c_vc`: Optional per-client override for the global `enable_i2c_vc` setting.
 - `boot_config_lines`: Optional additional multiline `config.txt` entries for just that client. Global `boot_config_lines` are applied first, then per-client lines are appended, and exact duplicate lines are removed.
 - `containers`: Either newline-separated image refs and remote source URLs, or a JSON array of container spec objects.
 
@@ -188,7 +192,7 @@ Top-level container fields:
 - `depends_on`: Optional array of managed container names, or an object using those names as keys. Dependencies only affect reconciliation order.
 - `env`: Object of environment variables.
 - `labels`: Object of Docker labels.
-- `devices`: Array of Docker `--device` strings.
+- `devices`: Array of Docker `--device` strings. Docker's default device permission set is read/write/mknod (`rwm`), and you can append an explicit mode such as `:rwm` when you want that access to be obvious in config examples.
 - `extra_hosts`: Array of Docker `--add-host` strings.
 - `ports`: Array of Docker port mappings. Each entry can be a string like `8080:80` or an object with `host`, `container`, and optional `protocol`.
 - `volumes`: Array of Docker bind mount strings, or objects with `source`, `target`, and optional `read_only`.
@@ -240,9 +244,10 @@ containers: |
         "8889:8889"
       ],
       "devices": [
-        "/dev/gpiochip0:/dev/gpiochip0",
-        "/dev/i2c-1:/dev/i2c-1",
-        "/dev/i2c-2:/dev/i2c-2"
+        "/dev/gpiochip0:/dev/gpiochip0:rwm",
+        "/dev/i2c-0:/dev/i2c-0:rwm",
+        "/dev/i2c-1:/dev/i2c-1:rwm",
+        "/dev/i2c-2:/dev/i2c-2:rwm"
       ]
     },
     {
@@ -321,9 +326,10 @@ containers: |
         "8889:8889"
       ],
       "devices": [
-        "/dev/gpiochip0:/dev/gpiochip0",
-        "/dev/i2c-1:/dev/i2c-1",
-        "/dev/i2c-2:/dev/i2c-2"
+        "/dev/gpiochip0:/dev/gpiochip0:rwm",
+        "/dev/i2c-0:/dev/i2c-0:rwm",
+        "/dev/i2c-1:/dev/i2c-1:rwm",
+        "/dev/i2c-2:/dev/i2c-2:rwm"
       ]
     },
     {
@@ -391,6 +397,7 @@ Recommended update patterns:
 - `depends_on` is only available in JSON mode. It controls reconcile/start order only; it does not wait for health checks or auto-create missing containers.
 - The client root filesystem is stored under `/data`, so client state survives add-on restarts.
 - When `enable_i2c` is set, provisioning manages both the exported boot partition's main `config.txt` and `etc/modules-load.d/modules.conf` in the exported rootfs so the firmware setting and `i2c-dev` module stay in sync.
+- When `enable_i2c_vc` is set, provisioning manages `dtparam=i2c_vc=on` in the same main `config.txt`; combined with `i2c-dev`, this allows the VC bus to appear as `/dev/i2c-0`.
 - Managed boot config entries are written into the exported boot partition's main `config.txt`, not an included fragment, so custom settings remain available from both TFTP boot and the later `/boot/firmware` NFS mount.
 - Raspberry Pi 2 v1.2, Pi 3, and CM3-class network boot first request `/bootcode.bin` from the TFTP root, then typically probe `/bootsig.bin`.
 - Raspberry Pi 4, 400, CM4, Pi 5, 500, and CM5 use the EEPROM bootloader instead of `bootcode.bin`.
