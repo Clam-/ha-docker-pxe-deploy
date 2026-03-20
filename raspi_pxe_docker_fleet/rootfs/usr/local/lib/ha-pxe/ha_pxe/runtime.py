@@ -14,12 +14,15 @@ from pathlib import Path
 from .addon_context import AddonContext
 from .errors import CommandError, HaPxeError
 from .fs_utils import atomic_write, clear_directory, ensure_directory
-from .shell import capture, capture_optional, run, spawn
+from .shell import capture, capture_optional, command_exists, run, spawn
 
 NFS_RPC_PIPEFS = Path("/var/lib/nfs/rpc_pipefs")
 NFS_PROC_FS = Path("/proc/fs/nfsd")
 NFS_THREAD_COUNT = "8"
 PROCESS_SHUTDOWN_TIMEOUT_SECONDS = 5
+RPCBIND_READY_TIMEOUT_SECONDS = 10
+NFS_PORT = "2049"
+NFS_DISABLED_VERSIONS = ("4", "4.1", "4.2")
 
 
 def ensure_directories(context: AddonContext) -> None:
@@ -195,7 +198,7 @@ def start_client_log_transport(context: AddonContext) -> None:
     context.logger.info(f"Client log transport is active on TCP {port}{context.paths.client_log_path}")
 
 
-def start_nfs_server(context: AddonContext) -> None:
+def start_nfs_server(context: AddonContext, server_ip: str) -> None:
     ensure_directory(NFS_RPC_PIPEFS)
     ensure_directory(NFS_PROC_FS)
     if run(["mountpoint", "-q", str(NFS_RPC_PIPEFS)], check=False).returncode != 0:
@@ -208,11 +211,11 @@ def start_nfs_server(context: AddonContext) -> None:
 
     rpcbind = spawn(["rpcbind", "-f", "-w"])
     context.background_processes.append(rpcbind)
-    time.sleep(1)
+    _wait_for_rpcbind(context)
     run(["exportfs", "-ra"])
     mountd = spawn(["rpc.mountd", "-F", "--manage-gids"])
     context.background_processes.append(mountd)
-    _start_nfs_threads(context)
+    _start_nfs_threads(context, server_ip)
     context.logger.info("NFS exports are active")
 
 
@@ -255,8 +258,9 @@ def _tftp_mounts(context: AddonContext) -> list[str]:
     return [line for line in output.splitlines() if line.startswith(root)]
 
 
-def _start_nfs_threads(context: AddonContext) -> None:
-    completed = run(["rpc.nfsd", NFS_THREAD_COUNT], check=False, capture_output=True)
+def _start_nfs_threads(context: AddonContext, server_ip: str) -> None:
+    command = _nfsd_command(context, server_ip)
+    completed = run(command, check=False, capture_output=True)
     if completed.returncode == 0:
         return
 
@@ -270,9 +274,13 @@ def _start_nfs_threads(context: AddonContext) -> None:
 
     _reset_nfs_server_state(context)
     run(["exportfs", "-ra"])
-    completed = run(["rpc.nfsd", NFS_THREAD_COUNT], check=False, capture_output=True)
+    completed = run(command, check=False, capture_output=True)
     if completed.returncode != 0:
-        raise CommandError(["rpc.nfsd", NFS_THREAD_COUNT], completed.returncode, completed.stderr or completed.stdout or "")
+        diagnostics = _nfs_start_diagnostics()
+        stderr = completed.stderr or completed.stdout or ""
+        if diagnostics:
+            stderr = f"{stderr}\n{diagnostics}".strip()
+        raise CommandError(command, completed.returncode, stderr)
 
 
 def _reset_nfs_server_state(context: AddonContext, *, unmount: bool = False) -> None:
@@ -296,6 +304,61 @@ def _mountpoint_active(path: Path) -> bool:
 
 def _command_output(completed: subprocess.CompletedProcess[str]) -> str:
     return (completed.stderr or completed.stdout or "").replace("\n", " ").strip()
+
+
+def _nfsd_command(context: AddonContext, server_ip: str) -> list[str]:
+    command = [
+        "rpc.nfsd",
+        "--host",
+        server_ip,
+        "--port",
+        NFS_PORT,
+        "--tcp",
+        "--no-udp",
+    ]
+    for version in NFS_DISABLED_VERSIONS:
+        command.extend(["--no-nfs-version", version])
+    if context.logger.level == "debug":
+        command.append("--debug")
+    command.append(NFS_THREAD_COUNT)
+    return command
+
+
+def _wait_for_rpcbind(context: AddonContext) -> None:
+    if not command_exists("rpcinfo"):
+        time.sleep(1)
+        return
+
+    deadline = time.monotonic() + RPCBIND_READY_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        completed = run(["rpcinfo", "-p", "127.0.0.1"], check=False, capture_output=True)
+        if completed.returncode == 0:
+            return
+        time.sleep(0.2)
+
+    output = _command_output(completed)
+    raise HaPxeError(f"rpcbind did not become ready in time{f': {output}' if output else ''}")
+
+
+def _nfs_start_diagnostics() -> str:
+    diagnostics: list[str] = []
+
+    if _mountpoint_active(NFS_PROC_FS):
+        for file_name in ("versions", "threads", "portlist"):
+            file_path = NFS_PROC_FS / file_name
+            try:
+                value = file_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if value:
+                diagnostics.append(f"{file_path}: {value}")
+
+    if command_exists("rpcinfo"):
+        output = capture_optional(["rpcinfo", "-p", "127.0.0.1"])
+        if output:
+            diagnostics.append(f"rpcinfo -p 127.0.0.1:\n{output}")
+
+    return "\n".join(diagnostics)
 
 
 def _terminate_background_processes(context: AddonContext) -> None:

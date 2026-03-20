@@ -46,7 +46,7 @@ def main() -> int:
                 raise HaPxeError("Each client entry must be an object")
             provision_client(context, client, server_ip)
 
-        start_nfs_server(context)
+        start_nfs_server(context, server_ip)
         start_tftp_server(context, server_ip)
         context.logger.warning(
             f"DHCP or ProxyDHCP is not included. Your network must direct PXE clients to {server_ip} for TFTP."

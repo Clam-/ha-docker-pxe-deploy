@@ -111,9 +111,11 @@ class StartNfsServerTests(unittest.TestCase):
                 if command[:3] == ["mount", "-t", "nfsd"]:
                     mounted.add(command[4])
                     return CompletedProcess(command, 0, "", "")
+                if command[:3] == ["rpcinfo", "-p", "127.0.0.1"]:
+                    return CompletedProcess(command, 0, "ready", "")
                 if command == ["rpc.nfsd", "0"]:
                     return CompletedProcess(command, 0, "", "")
-                if command == ["rpc.nfsd", "8"]:
+                if command[:1] == ["rpc.nfsd"]:
                     nfsd_start_attempts += 1
                     if nfsd_start_attempts == 1:
                         return CompletedProcess(command, 1, "already running", "")
@@ -130,15 +132,91 @@ class StartNfsServerTests(unittest.TestCase):
                 patch("ha_pxe.runtime.spawn", side_effect=fake_spawn),
                 patch("ha_pxe.runtime.shutil.copy2"),
                 patch("ha_pxe.runtime.time.sleep"),
+                patch("ha_pxe.runtime.command_exists", return_value=True),
             ):
-                start_nfs_server(context)
+                start_nfs_server(context, "192.0.2.10")
 
             self.assertEqual(nfsd_start_attempts, 2)
             self.assertIn(["rpc.nfsd", "0"], run_calls)
             self.assertEqual(run_calls.count(["exportfs", "-ra"]), 2)
+            self.assertIn(
+                [
+                    "rpc.nfsd",
+                    "--host",
+                    "192.0.2.10",
+                    "--port",
+                    "2049",
+                    "--tcp",
+                    "--no-udp",
+                    "--no-nfs-version",
+                    "4",
+                    "--no-nfs-version",
+                    "4.1",
+                    "--no-nfs-version",
+                    "4.2",
+                    "8",
+                ],
+                run_calls,
+            )
             self.assertEqual(
                 spawned_commands,
                 [["rpcbind", "-f", "-w"], ["rpc.mountd", "-F", "--manage-gids"]],
+            )
+
+    def test_start_nfs_server_enables_debug_flag_when_debug_logging_is_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            context = AddonContext(paths=AddonPaths(root=temp_dir))
+            context.logger.level = "debug"
+            run_calls: list[list[str]] = []
+
+            def fake_run(
+                command: list[str],
+                *,
+                check: bool = True,
+                capture_output: bool = False,
+                cwd: Path | None = None,
+                env: dict[str, str] | None = None,
+                input_text: str | None = None,
+                stdout: object | int | None = None,
+                stderr: object | int | None = None,
+            ) -> CompletedProcess[str]:
+                del check, capture_output, cwd, env, input_text, stdout, stderr
+                run_calls.append(command)
+                if command[:2] == ["mountpoint", "-q"]:
+                    return CompletedProcess(command, 1, "", "")
+                if command[:3] == ["rpcinfo", "-p", "127.0.0.1"]:
+                    return CompletedProcess(command, 0, "ready", "")
+                return CompletedProcess(command, 0, "", "")
+
+            with (
+                patch("ha_pxe.runtime.ensure_directory"),
+                patch("ha_pxe.runtime.run", side_effect=fake_run),
+                patch("ha_pxe.runtime.spawn", return_value=_RunningProcess()),
+                patch("ha_pxe.runtime.shutil.copy2"),
+                patch("ha_pxe.runtime.command_exists", return_value=True),
+            ):
+                start_nfs_server(context, "192.0.2.10")
+
+            self.assertIn(
+                [
+                    "rpc.nfsd",
+                    "--host",
+                    "192.0.2.10",
+                    "--port",
+                    "2049",
+                    "--tcp",
+                    "--no-udp",
+                    "--no-nfs-version",
+                    "4",
+                    "--no-nfs-version",
+                    "4.1",
+                    "--no-nfs-version",
+                    "4.2",
+                    "--debug",
+                    "8",
+                ],
+                run_calls,
             )
 
 
