@@ -14,12 +14,13 @@ from typing import Any
 
 from ..container_specs import sort_container_specs
 from ..errors import HaPxeError, SpecError
-from ..fs_utils import atomic_write, clear_directory, ensure_directory
+from ..fs_utils import atomic_write, ensure_directory
 from ..shell import run
 from ..text import slug, stable_json
 from .logging import ClientLogger
 
 MANAGED_DOCKER_NETWORK_NAME = "ha-pxe-managed"
+FILES_HASH_STATE_FILE = "applied-files-hash"
 
 
 @dataclass
@@ -66,7 +67,23 @@ def container_dir_for_spec(state_root: Path, spec: dict[str, Any]) -> Path:
 
 
 def spec_hash(spec: dict[str, Any]) -> str:
-    return hashlib.sha256(stable_json(spec).encode("utf-8")).hexdigest()
+    runtime_spec = dict(spec)
+    runtime_spec["files"] = _generated_file_mount_topology(spec)
+    return hashlib.sha256(stable_json(runtime_spec).encode("utf-8")).hexdigest()
+
+
+def generated_files_hash(spec: dict[str, Any]) -> str:
+    if not spec.get("files"):
+        return ""
+    rendered_files = [
+        {
+            "container_path": entry["container_path"],
+            "mode": entry["mode"],
+            "content": entry["content"],
+        }
+        for entry in _generated_file_entries(spec)
+    ]
+    return hashlib.sha256(stable_json(rendered_files).encode("utf-8")).hexdigest()
 
 
 def reconcile_container(
@@ -86,32 +103,54 @@ def reconcile_container(
         ensure_directory(state_dir)
         logger.info(f"State directory for {display_name} is {state_dir}")
 
-        desired_image_id = ensure_desired_image(spec, key, state_dir, logger, serial)
-        file_mounts = materialize_files(spec, state_dir, logger)
         desired_spec_hash = spec_hash(spec)
+        desired_files_hash = generated_files_hash(spec)
         current_spec_hash = _docker_inspect(container_name, "{{ index .Config.Labels \"io.ha_pxe.spec_hash\" }}")
         current_image_id = _docker_inspect(container_name, "{{.Image}}")
         current_state = _docker_inspect(container_name, "{{.State.Status}}")
+        current_files_hash = read_applied_files_hash(state_dir) or detect_materialized_files_hash(spec, state_dir)
 
         if not current_image_id:
             logger.info(f"Container {container_name} does not exist yet; creating it")
+            desired_image_id = ensure_desired_image(spec, key, state_dir, logger, serial)
+            file_mounts = materialize_files(spec, state_dir, logger)
             run_container(spec, key, container_name, desired_spec_hash, file_mounts, logger, serial)
+            write_applied_files_hash(state_dir, desired_files_hash)
             logger.stage_complete(stage_name, f"Created container {display_name}")
+            return
+
+        desired_image_id = ensure_desired_image(spec, key, state_dir, logger, serial)
+        if current_image_id == desired_image_id and current_spec_hash == desired_spec_hash and current_files_hash != desired_files_hash:
+            logger.info(
+                f"Generated file content changed for {container_name}; updating bind-mounted files and restarting the existing container"
+            )
+            if current_state == "running":
+                logger.info(f"Stopping {container_name} before applying generated file updates")
+                if run(["docker", "stop", container_name], check=False).returncode != 0:
+                    raise HaPxeError(f"Container {display_name} is running but Docker could not stop it for a generated file refresh")
+            file_mounts = materialize_files(spec, state_dir, logger)
+            logger.info(f"Restarting {container_name} to pick up updated generated files ({len(file_mounts)} mount(s))")
+            if run(["docker", "start", container_name], check=False).returncode != 0:
+                raise HaPxeError(f"Container {display_name} exists but Docker could not start it after a generated file refresh")
+            write_applied_files_hash(state_dir, desired_files_hash)
+            logger.stage_complete(stage_name, f"Restarted container {display_name} after generated file updates")
             return
 
         if current_image_id != desired_image_id or current_spec_hash != desired_spec_hash:
             logger.info(f"Recreating {container_name}")
             run(["docker", "rm", "-f", container_name])
+            file_mounts = materialize_files(spec, state_dir, logger)
             run_container(spec, key, container_name, desired_spec_hash, file_mounts, logger, serial)
+            write_applied_files_hash(state_dir, desired_files_hash)
             logger.stage_complete(stage_name, f"Recreated container {display_name} with updated image or spec")
             return
 
         if current_state != "running":
             logger.info(f"Container {container_name} exists but is not running; attempting to start it")
+            if run(["docker", "start", container_name], check=False).returncode != 0:
+                raise HaPxeError(f"Container {display_name} exists but Docker could not start it")
         else:
             logger.info(f"Container {container_name} is already up to date")
-        if run(["docker", "start", container_name], check=False).returncode != 0:
-            raise HaPxeError(f"Container {display_name} exists but Docker could not start it")
         logger.stage_complete(stage_name, f"Container {display_name} matches the desired state")
     except Exception as exc:
         logger.stage_fail(stage_name, f"Failed to reconcile container {display_name}: {exc}")
@@ -325,13 +364,66 @@ def build_image_if_needed(
 
 def materialize_files(spec: dict[str, Any], state_dir: Path, logger: ClientLogger) -> list[str]:
     files_dir = state_dir / "files"
-    clear_directory(files_dir)
+    ensure_directory(files_dir)
     logger.info(f"Materializing generated container files into {files_dir}")
     mounts: list[str] = []
+    desired_paths: set[Path] = set()
+    for entry in _generated_file_entries(spec):
+        host_path = files_dir / entry["container_path"].lstrip("/")
+        ensure_directory(host_path.parent)
+        desired_paths.add(host_path)
+        _write_generated_file(host_path, entry["content"], int(entry["mode"], 8))
+        volume = f"{host_path}:{entry['container_path']}"
+        if entry["read_only"]:
+            volume = f"{volume}:ro"
+        mounts.append(volume)
+        logger.info(f"Prepared generated file mount {entry['container_path']} ({entry['mode']})")
+    _prune_stale_generated_files(files_dir, desired_paths)
+    logger.info(f"Materialized {len(mounts)} generated file mount(s)")
+    return mounts
+
+
+def read_applied_files_hash(state_dir: Path) -> str:
+    path = state_dir / FILES_HASH_STATE_FILE
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def write_applied_files_hash(state_dir: Path, digest: str) -> None:
+    atomic_write(state_dir / FILES_HASH_STATE_FILE, f"{digest}\n", 0o644)
+
+
+def detect_materialized_files_hash(spec: dict[str, Any], state_dir: Path) -> str:
+    if not spec.get("files"):
+        return ""
+    files_dir = state_dir / "files"
+    current_entries: list[dict[str, Any]] = []
+    for entry in _generated_file_entries(spec):
+        host_path = files_dir / entry["container_path"].lstrip("/")
+        if not host_path.is_file() or host_path.is_symlink():
+            return ""
+        try:
+            current_content = host_path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        current_entries.append(
+            {
+                "container_path": entry["container_path"],
+                "mode": f"{host_path.stat().st_mode & 0o777:04o}",
+                "content": current_content,
+            }
+        )
+    return hashlib.sha256(stable_json(current_entries).encode("utf-8")).hexdigest()
+
+
+def _generated_file_entries(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
     for file_spec in spec.get("files", []):
         container_path = str(file_spec["container_path"])
-        host_path = files_dir / container_path.lstrip("/")
-        ensure_directory(host_path.parent)
         file_format = str(file_spec["format"])
         if file_format == "json":
             content = json.dumps(file_spec.get("content"), sort_keys=True, indent=2) + "\n"
@@ -340,14 +432,59 @@ def materialize_files(spec: dict[str, Any], state_dir: Path, logger: ClientLogge
             content = content_value if isinstance(content_value, str) else str(content_value)
         else:
             raise HaPxeError(f"Unsupported file format '{file_format}' for {container_path}")
-        atomic_write(host_path, content, int(str(file_spec["mode"]), 8))
-        volume = f"{host_path}:{container_path}"
-        if bool(file_spec.get("read_only", True)):
-            volume = f"{volume}:ro"
-        mounts.append(volume)
-        logger.info(f"Prepared generated file mount {container_path} ({file_spec['mode']})")
-    logger.info(f"Materialized {len(mounts)} generated file mount(s)")
-    return mounts
+        entries.append(
+            {
+                "container_path": container_path,
+                "content": content,
+                "mode": str(file_spec["mode"]),
+                "read_only": bool(file_spec.get("read_only", True)),
+            }
+        )
+    return entries
+
+
+def _generated_file_mount_topology(spec: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "container_path": entry["container_path"],
+            "read_only": entry["read_only"],
+        }
+        for entry in _generated_file_entries(spec)
+    ]
+
+
+def _write_generated_file(path: Path, content: str, mode: int) -> None:
+    if _generated_file_matches(path, content, mode):
+        return
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+    atomic_write(path, content, mode)
+
+
+def _generated_file_matches(path: Path, content: str, mode: int) -> bool:
+    if not path.exists() or not path.is_file() or path.is_symlink():
+        return False
+    try:
+        existing_content = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    existing_mode = path.stat().st_mode & 0o777
+    return existing_content == content and existing_mode == mode
+
+
+def _prune_stale_generated_files(files_dir: Path, desired_paths: set[Path]) -> None:
+    desired_relative_paths = {path.relative_to(files_dir) for path in desired_paths}
+    for path in sorted(files_dir.rglob("*"), key=lambda item: len(item.relative_to(files_dir).parts), reverse=True):
+        relative_path = path.relative_to(files_dir)
+        if path.is_dir() and not path.is_symlink():
+            if not any(path.iterdir()):
+                path.rmdir()
+            continue
+        if relative_path in desired_relative_paths:
+            continue
+        path.unlink(missing_ok=True)
 
 
 def run_container(

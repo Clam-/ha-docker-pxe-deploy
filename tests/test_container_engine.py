@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -15,7 +16,12 @@ from ha_pxe.client.container_engine import (
     MANAGED_DOCKER_NETWORK_NAME,
     container_name_for_spec,
     ensure_managed_network,
+    generated_files_hash,
+    materialize_files,
+    reconcile_container,
     run_container,
+    spec_hash,
+    spec_key,
 )
 
 
@@ -26,23 +32,19 @@ class _FakeLogger:
     def info(self, message: str) -> None:
         self.messages.append(message)
 
+    def stage_start(self, stage: str, message: str) -> None:
+        self.messages.append(f"{stage}:start:{message}")
+
+    def stage_complete(self, stage: str, message: str) -> None:
+        self.messages.append(f"{stage}:complete:{message}")
+
+    def stage_fail(self, stage: str, message: str) -> None:
+        self.messages.append(f"{stage}:fail:{message}")
+
 
 class ContainerEngineTests(unittest.TestCase):
-    def test_container_name_for_spec_defaults_to_spec_name(self) -> None:
-        self.assertEqual(
-            container_name_for_spec(
-                {
-                    "name": "rgpiod",
-                    "source": {"type": "image", "ref": "docker.io/library/busybox:latest"},
-                }
-            ),
-            "rgpiod",
-        )
-
-    def test_run_container_uses_managed_bridge_and_name_alias_by_default(self) -> None:
-        logger = _FakeLogger()
-        commands: list[list[str]] = []
-        spec = {
+    def _base_spec(self) -> dict[str, object]:
+        return {
             "name": "rgpiod",
             "container_name": "rgpiod",
             "image": "docker.io/library/busybox:latest",
@@ -57,7 +59,25 @@ class ContainerEngineTests(unittest.TestCase):
             "ports": [],
             "volumes": [],
             "command": [],
+            "source": {"type": "image", "ref": "docker.io/library/busybox:latest"},
+            "files": [],
         }
+
+    def test_container_name_for_spec_defaults_to_spec_name(self) -> None:
+        self.assertEqual(
+            container_name_for_spec(
+                {
+                    "name": "rgpiod",
+                    "source": {"type": "image", "ref": "docker.io/library/busybox:latest"},
+                }
+            ),
+            "rgpiod",
+        )
+
+    def test_run_container_uses_managed_bridge_and_name_alias_by_default(self) -> None:
+        logger = _FakeLogger()
+        commands: list[list[str]] = []
+        spec = self._base_spec()
 
         def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
             commands.append(command)
@@ -102,6 +122,203 @@ class ContainerEngineTests(unittest.TestCase):
                 MANAGED_DOCKER_NETWORK_NAME,
             ],
         )
+
+    def test_materialize_files_preserves_unchanged_file_inode(self) -> None:
+        logger = _FakeLogger()
+        spec = self._base_spec()
+        spec["files"] = [
+            {
+                "container_path": "/config/config.json",
+                "format": "json",
+                "content": {"enabled": True},
+                "mode": "0644",
+                "read_only": True,
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_dir = Path(tmpdir)
+            materialize_files(spec, state_dir, logger)
+            host_path = state_dir / "files" / "config" / "config.json"
+            initial_inode = host_path.stat().st_ino
+
+            materialize_files(spec, state_dir, logger)
+
+            self.assertEqual(host_path.stat().st_ino, initial_inode)
+
+    def test_reconcile_container_skips_file_materialization_for_matching_running_container(self) -> None:
+        logger = _FakeLogger()
+        spec = self._base_spec()
+        spec["files"] = [
+            {
+                "container_path": "/config/config.json",
+                "format": "json",
+                "content": {"enabled": True},
+                "mode": "0644",
+                "read_only": True,
+            }
+        ]
+        desired_spec_hash = spec_hash(spec)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("ha_pxe.client.container_engine.ensure_directory"),
+                patch("ha_pxe.client.container_engine.ensure_desired_image", return_value="image123"),
+                patch(
+                    "ha_pxe.client.container_engine._docker_inspect",
+                    side_effect=[desired_spec_hash, "image123", "running"],
+                ),
+                patch("ha_pxe.client.container_engine.read_applied_files_hash", return_value=generated_files_hash(spec)),
+                patch("ha_pxe.client.container_engine.materialize_files") as materialize_mock,
+                patch("ha_pxe.client.container_engine.run_container") as run_container_mock,
+                patch("ha_pxe.client.container_engine.run") as run_mock,
+            ):
+                reconcile_container(spec, Path(tmpdir), logger, "serial123")
+
+        materialize_mock.assert_not_called()
+        run_container_mock.assert_not_called()
+        run_mock.assert_not_called()
+
+    def test_reconcile_container_removes_container_before_rewriting_generated_files(self) -> None:
+        logger = _FakeLogger()
+        spec = self._base_spec()
+        spec["files"] = [
+            {
+                "container_path": "/config/config.json",
+                "format": "json",
+                "content": {"enabled": True},
+                "mode": "0644",
+                "read_only": True,
+            }
+        ]
+        events: list[str] = []
+
+        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            if command[:3] == ["docker", "rm", "-f"]:
+                events.append("rm")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        def fake_materialize_files(*_: object) -> list[str]:
+            events.append("materialize")
+            return []
+
+        def fake_run_container(*_: object) -> None:
+            events.append("run")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("ha_pxe.client.container_engine.ensure_directory"),
+                patch("ha_pxe.client.container_engine.ensure_desired_image", return_value="image123"),
+                patch(
+                    "ha_pxe.client.container_engine._docker_inspect",
+                    side_effect=["old-spec-hash", "old-image-id", "running"],
+                ),
+                patch("ha_pxe.client.container_engine.run", side_effect=fake_run),
+                patch("ha_pxe.client.container_engine.materialize_files", side_effect=fake_materialize_files),
+                patch("ha_pxe.client.container_engine.run_container", side_effect=fake_run_container),
+                patch("ha_pxe.client.container_engine.write_applied_files_hash"),
+            ):
+                reconcile_container(spec, Path(tmpdir), logger, "serial123")
+
+        self.assertEqual(events, ["rm", "materialize", "run"])
+
+    def test_reconcile_container_restarts_existing_container_when_only_generated_files_change(self) -> None:
+        logger = _FakeLogger()
+        spec = self._base_spec()
+        spec["files"] = [
+            {
+                "container_path": "/config/config.json",
+                "format": "json",
+                "content": {"enabled": True, "threshold": 42},
+                "mode": "0644",
+                "read_only": True,
+            }
+        ]
+        desired_spec_hash = spec_hash(spec)
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_root = Path(tmpdir)
+            expected_state_dir = state_root / spec_key(spec)
+            with (
+                patch("ha_pxe.client.container_engine.ensure_directory"),
+                patch(
+                    "ha_pxe.client.container_engine._docker_inspect",
+                    side_effect=[desired_spec_hash, "image123", "running"],
+                ),
+                patch("ha_pxe.client.container_engine.read_applied_files_hash", return_value="old-files-hash"),
+                patch("ha_pxe.client.container_engine.materialize_files", return_value=["files/config:/config/config.json:ro"]) as materialize_mock,
+                patch("ha_pxe.client.container_engine.write_applied_files_hash") as write_hash_mock,
+                patch("ha_pxe.client.container_engine.ensure_desired_image", return_value="image123") as ensure_image_mock,
+                patch("ha_pxe.client.container_engine.run_container") as run_container_mock,
+                patch("ha_pxe.client.container_engine.run", side_effect=fake_run),
+            ):
+                reconcile_container(spec, state_root, logger, "serial123")
+
+            ensure_image_mock.assert_called_once()
+            run_container_mock.assert_not_called()
+            materialize_mock.assert_called_once()
+            write_hash_mock.assert_called_once_with(expected_state_dir, generated_files_hash(spec))
+        self.assertEqual(commands, [["docker", "stop", "rgpiod"], ["docker", "start", "rgpiod"]])
+        self.assertTrue(
+            any("Generated file content changed for rgpiod" in message for message in logger.messages),
+            logger.messages,
+        )
+
+    def test_reconcile_container_recreates_when_image_drift_and_generated_files_change_together(self) -> None:
+        logger = _FakeLogger()
+        spec = self._base_spec()
+        spec["files"] = [
+            {
+                "container_path": "/config/config.json",
+                "format": "json",
+                "content": {"enabled": True, "threshold": 42},
+                "mode": "0644",
+                "read_only": True,
+            }
+        ]
+        desired_spec_hash = spec_hash(spec)
+        events: list[str] = []
+
+        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            if command[:3] == ["docker", "rm", "-f"]:
+                events.append("rm")
+            elif command[:3] == ["docker", "stop", "rgpiod"]:
+                events.append("stop")
+            elif command[:3] == ["docker", "start", "rgpiod"]:
+                events.append("start")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        def fake_materialize_files(*_: object) -> list[str]:
+            events.append("materialize")
+            return ["files/config:/config/config.json:ro"]
+
+        def fake_run_container(*_: object) -> None:
+            events.append("run")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("ha_pxe.client.container_engine.ensure_directory"),
+                patch(
+                    "ha_pxe.client.container_engine._docker_inspect",
+                    side_effect=[desired_spec_hash, "current-image-id", "running"],
+                ),
+                patch("ha_pxe.client.container_engine.read_applied_files_hash", return_value="old-files-hash"),
+                patch("ha_pxe.client.container_engine.ensure_desired_image", return_value="new-image-id") as ensure_image_mock,
+                patch("ha_pxe.client.container_engine.materialize_files", side_effect=fake_materialize_files),
+                patch("ha_pxe.client.container_engine.run_container", side_effect=fake_run_container),
+                patch("ha_pxe.client.container_engine.write_applied_files_hash"),
+                patch("ha_pxe.client.container_engine.run", side_effect=fake_run),
+            ):
+                reconcile_container(spec, Path(tmpdir), logger, "serial123")
+
+        ensure_image_mock.assert_called_once()
+        self.assertEqual(events, ["rm", "materialize", "run"])
+        self.assertFalse(any(event in {"stop", "start"} for event in events))
 
 
 if __name__ == "__main__":
