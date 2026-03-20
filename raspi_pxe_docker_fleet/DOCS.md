@@ -70,21 +70,10 @@ clients:
         {
           "name": "janky-thermostat",
           "container_name": "janky-thermostat",
-          "source": {
-            "type": "git",
-            "url": "https://github.com/Clam-/ha-pxe-janky-thermostat.git",
-            "ref": "main",
-            "context": ".",
-            "dockerfile": "Dockerfile"
-          },
+          "image": "ghcr.io/clam-docker-images/janky-thermostat:latest",
           "depends_on": [
             "rgpiod"
           ],
-          "env": {
-            "MQTT_BROKER": "mosquitto",
-            "MQTT_PORT": "1883",
-            "I2C_BUS": "0"
-          },
           "files": [
             {
               "container_path": "/config/config.json",
@@ -269,10 +258,6 @@ containers: |
       "depends_on": [
         "rgpiod"
       ],
-      "env": {
-        "MQTT_BROKER": "mosquitto",
-        "MQTT_PORT": "1883"
-      },
       "files": [
         {
           "container_path": "/config/config.json",
@@ -348,10 +333,6 @@ containers: |
       "depends_on": [
         "rgpiod"
       ],
-      "env": {
-        "MQTT_BROKER": "mosquitto",
-        "MQTT_PORT": "1883"
-      },
       "files": [
         {
           "container_path": "/config/config.json",
