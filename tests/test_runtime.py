@@ -160,7 +160,25 @@ class StartNfsServerTests(unittest.TestCase):
             )
             self.assertEqual(
                 spawned_commands,
-                [["rpcbind", "-f", "-w"], ["rpc.mountd", "-F", "--manage-gids"]],
+                [
+                    ["rpcbind", "-f", "-w"],
+                    [
+                        "rpc.statd",
+                        "-F",
+                        "-L",
+                        "-n",
+                        "192.0.2.10",
+                        "-p",
+                        "32765",
+                        "-o",
+                        "32766",
+                        "-T",
+                        "32768",
+                        "-U",
+                        "32768",
+                    ],
+                    ["rpc.mountd", "-F", "--manage-gids", "--port", "32767"],
+                ],
             )
 
     def test_start_nfs_server_enables_debug_flag_when_debug_logging_is_enabled(self) -> None:
@@ -169,6 +187,7 @@ class StartNfsServerTests(unittest.TestCase):
             context = AddonContext(paths=AddonPaths(root=temp_dir))
             context.logger.level = "debug"
             run_calls: list[list[str]] = []
+            spawned_commands: list[list[str]] = []
 
             def fake_run(
                 command: list[str],
@@ -189,10 +208,14 @@ class StartNfsServerTests(unittest.TestCase):
                     return CompletedProcess(command, 0, "ready", "")
                 return CompletedProcess(command, 0, "", "")
 
+            def fake_spawn(command: list[str]) -> _RunningProcess:
+                spawned_commands.append(command)
+                return _RunningProcess(command)
+
             with (
                 patch("ha_pxe.runtime.ensure_directory"),
                 patch("ha_pxe.runtime.run", side_effect=fake_run),
-                patch("ha_pxe.runtime.spawn", return_value=_RunningProcess()),
+                patch("ha_pxe.runtime.spawn", side_effect=fake_spawn),
                 patch("ha_pxe.runtime.shutil.copy2"),
                 patch("ha_pxe.runtime.command_exists", return_value=True),
             ):
@@ -218,6 +241,50 @@ class StartNfsServerTests(unittest.TestCase):
                 ],
                 run_calls,
             )
+            self.assertIn(
+                ["rpc.mountd", "-F", "--manage-gids", "--port", "32767"],
+                spawned_commands,
+            )
+
+    def test_start_nfs_server_fails_when_statd_exits_immediately(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            context = AddonContext(paths=AddonPaths(root=temp_dir))
+
+            class _ExitedProcess:
+                def poll(self) -> int:
+                    return 1
+
+            def fake_run(
+                command: list[str],
+                *,
+                check: bool = True,
+                capture_output: bool = False,
+                cwd: Path | None = None,
+                env: dict[str, str] | None = None,
+                input_text: str | None = None,
+                stdout: object | int | None = None,
+                stderr: object | int | None = None,
+            ) -> CompletedProcess[str]:
+                del check, capture_output, cwd, env, input_text, stdout, stderr
+                if command[:2] == ["mountpoint", "-q"]:
+                    return CompletedProcess(command, 1, "", "")
+                if command[:3] == ["rpcinfo", "-p", "127.0.0.1"]:
+                    return CompletedProcess(command, 0, "ready", "")
+                return CompletedProcess(command, 0, "", "")
+
+            with (
+                patch("ha_pxe.runtime.ensure_directory"),
+                patch("ha_pxe.runtime.run", side_effect=fake_run),
+                patch(
+                    "ha_pxe.runtime.spawn",
+                    side_effect=[_RunningProcess(["rpcbind", "-f", "-w"]), _ExitedProcess()],
+                ),
+                patch("ha_pxe.runtime.shutil.copy2"),
+                patch("ha_pxe.runtime.command_exists", return_value=True),
+            ):
+                with self.assertRaisesRegex(Exception, "rpc.statd failed to start"):
+                    start_nfs_server(context, "192.0.2.10")
 
 
 class ShutdownTests(unittest.TestCase):

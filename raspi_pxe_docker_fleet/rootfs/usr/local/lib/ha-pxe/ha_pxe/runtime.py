@@ -18,11 +18,17 @@ from .shell import capture, capture_optional, command_exists, run, spawn
 
 NFS_RPC_PIPEFS = Path("/var/lib/nfs/rpc_pipefs")
 NFS_PROC_FS = Path("/proc/fs/nfsd")
+NFS_SM_DIR = Path("/var/lib/nfs/sm")
+NFS_SM_BAK_DIR = Path("/var/lib/nfs/sm.bak")
 NFS_THREAD_COUNT = "8"
 PROCESS_SHUTDOWN_TIMEOUT_SECONDS = 5
 RPCBIND_READY_TIMEOUT_SECONDS = 10
 NFS_PORT = "2049"
 NFS_DISABLED_VERSIONS = ("4", "4.1", "4.2")
+NFS_MOUNTD_PORT = "32767"
+NFS_STATD_PORT = "32765"
+NFS_STATD_OUTGOING_PORT = "32766"
+NFS_LOCKD_PORT = "32768"
 
 
 def ensure_directories(context: AddonContext) -> None:
@@ -201,6 +207,8 @@ def start_client_log_transport(context: AddonContext) -> None:
 def start_nfs_server(context: AddonContext, server_ip: str) -> None:
     ensure_directory(NFS_RPC_PIPEFS)
     ensure_directory(NFS_PROC_FS)
+    ensure_directory(NFS_SM_DIR)
+    ensure_directory(NFS_SM_BAK_DIR)
     if run(["mountpoint", "-q", str(NFS_RPC_PIPEFS)], check=False).returncode != 0:
         run(["mount", "-t", "rpc_pipefs", "sunrpc", str(NFS_RPC_PIPEFS)])
     if run(["mountpoint", "-q", str(NFS_PROC_FS)], check=False).returncode != 0:
@@ -212,8 +220,10 @@ def start_nfs_server(context: AddonContext, server_ip: str) -> None:
     rpcbind = spawn(["rpcbind", "-f", "-w"])
     context.background_processes.append(rpcbind)
     _wait_for_rpcbind(context)
+    statd = _start_statd_server(context, server_ip)
+    context.background_processes.append(statd)
     run(["exportfs", "-ra"])
-    mountd = spawn(["rpc.mountd", "-F", "--manage-gids"])
+    mountd = spawn(["rpc.mountd", "-F", "--manage-gids", "--port", NFS_MOUNTD_PORT])
     context.background_processes.append(mountd)
     _start_nfs_threads(context, server_ip)
     context.logger.info("NFS exports are active")
@@ -353,12 +363,46 @@ def _nfs_start_diagnostics() -> str:
             if value:
                 diagnostics.append(f"{file_path}: {value}")
 
+    for file_path in (
+        Path("/proc/sys/fs/nfs/nlm_tcpport"),
+        Path("/proc/sys/fs/nfs/nlm_udpport"),
+    ):
+        try:
+            value = file_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if value:
+            diagnostics.append(f"{file_path}: {value}")
+
     if command_exists("rpcinfo"):
         output = capture_optional(["rpcinfo", "-p", "127.0.0.1"])
         if output:
             diagnostics.append(f"rpcinfo -p 127.0.0.1:\n{output}")
 
     return "\n".join(diagnostics)
+
+
+def _start_statd_server(context: AddonContext, server_ip: str) -> subprocess.Popen[str]:
+    command = [
+        "rpc.statd",
+        "-F",
+        "-L",
+        "-n",
+        server_ip,
+        "-p",
+        NFS_STATD_PORT,
+        "-o",
+        NFS_STATD_OUTGOING_PORT,
+        "-T",
+        NFS_LOCKD_PORT,
+        "-U",
+        NFS_LOCKD_PORT,
+    ]
+    process = spawn(command)
+    time.sleep(1)
+    if process.poll() is not None:
+        raise HaPxeError("rpc.statd failed to start")
+    return process
 
 
 def _terminate_background_processes(context: AddonContext) -> None:
