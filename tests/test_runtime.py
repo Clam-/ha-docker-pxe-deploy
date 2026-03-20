@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from subprocess import CompletedProcess
 from unittest.mock import patch
 
 
@@ -12,12 +13,29 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from ha_pxe.addon_context import AddonContext, AddonPaths
-from ha_pxe.runtime import start_client_log_transport, start_tftp_server
+from ha_pxe.runtime import shutdown, start_client_log_transport, start_nfs_server, start_tftp_server
 
 
 class _RunningProcess:
+    def __init__(self, args: list[str] | None = None) -> None:
+        self.args = args or []
+        self._running = True
+        self.wait_calls = 0
+
     def poll(self) -> None:
+        return None if self._running else 0
+
+    def terminate(self) -> None:
         return None
+
+    def wait(self, timeout: float | None = None) -> int:
+        del timeout
+        self.wait_calls += 1
+        self._running = False
+        return 0
+
+    def kill(self) -> None:
+        self._running = False
 
 
 class StartTftpServerTests(unittest.TestCase):
@@ -58,6 +76,123 @@ class StartClientLogTransportTests(unittest.TestCase):
                 spawned_commands[0][1:],
                 ["--host", "0.0.0.0", "--port", "8099", "--path", "/client-log"],
             )
+
+
+class StartNfsServerTests(unittest.TestCase):
+    def test_start_nfs_server_retries_after_resetting_stale_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            context = AddonContext(paths=AddonPaths(root=temp_dir))
+            mounted: set[str] = set()
+            run_calls: list[list[str]] = []
+            spawned_commands: list[list[str]] = []
+            nfsd_start_attempts = 0
+
+            def fake_run(
+                command: list[str],
+                *,
+                check: bool = True,
+                capture_output: bool = False,
+                cwd: Path | None = None,
+                env: dict[str, str] | None = None,
+                input_text: str | None = None,
+                stdout: object | int | None = None,
+                stderr: object | int | None = None,
+            ) -> CompletedProcess[str]:
+                del check, capture_output, cwd, env, input_text, stdout, stderr
+                nonlocal nfsd_start_attempts
+                run_calls.append(command)
+
+                if command[:2] == ["mountpoint", "-q"]:
+                    return CompletedProcess(command, 0 if command[2] in mounted else 1, "", "")
+                if command[:3] == ["mount", "-t", "rpc_pipefs"]:
+                    mounted.add(command[4])
+                    return CompletedProcess(command, 0, "", "")
+                if command[:3] == ["mount", "-t", "nfsd"]:
+                    mounted.add(command[4])
+                    return CompletedProcess(command, 0, "", "")
+                if command == ["rpc.nfsd", "0"]:
+                    return CompletedProcess(command, 0, "", "")
+                if command == ["rpc.nfsd", "8"]:
+                    nfsd_start_attempts += 1
+                    if nfsd_start_attempts == 1:
+                        return CompletedProcess(command, 1, "already running", "")
+                    return CompletedProcess(command, 0, "", "")
+                return CompletedProcess(command, 0, "", "")
+
+            def fake_spawn(command: list[str]) -> _RunningProcess:
+                spawned_commands.append(command)
+                return _RunningProcess(command)
+
+            with (
+                patch("ha_pxe.runtime.ensure_directory"),
+                patch("ha_pxe.runtime.run", side_effect=fake_run),
+                patch("ha_pxe.runtime.spawn", side_effect=fake_spawn),
+                patch("ha_pxe.runtime.shutil.copy2"),
+                patch("ha_pxe.runtime.time.sleep"),
+            ):
+                start_nfs_server(context)
+
+            self.assertEqual(nfsd_start_attempts, 2)
+            self.assertIn(["rpc.nfsd", "0"], run_calls)
+            self.assertEqual(run_calls.count(["exportfs", "-ra"]), 2)
+            self.assertEqual(
+                spawned_commands,
+                [["rpcbind", "-f", "-w"], ["rpc.mountd", "-F", "--manage-gids"]],
+            )
+
+
+class ShutdownTests(unittest.TestCase):
+    def test_shutdown_stops_nfs_state_and_waits_for_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            context = AddonContext(paths=AddonPaths(root=temp_dir))
+            process_one = _RunningProcess(["rpcbind", "-f", "-w"])
+            process_two = _RunningProcess(["rpc.mountd", "-F", "--manage-gids"])
+            context.background_processes.extend([process_one, process_two])
+            run_calls: list[list[str]] = []
+            mounted = {"/proc/fs/nfsd", "/var/lib/nfs/rpc_pipefs"}
+
+            def fake_run(
+                command: list[str],
+                *,
+                check: bool = True,
+                capture_output: bool = False,
+                cwd: Path | None = None,
+                env: dict[str, str] | None = None,
+                input_text: str | None = None,
+                stdout: object | int | None = None,
+                stderr: object | int | None = None,
+            ) -> CompletedProcess[str]:
+                del check, capture_output, cwd, env, input_text, stdout, stderr
+                run_calls.append(command)
+
+                if command[:2] == ["mountpoint", "-q"]:
+                    return CompletedProcess(command, 0 if command[2] in mounted else 1, "", "")
+                if command[:1] == ["umount"]:
+                    mounted.discard(command[1])
+                    return CompletedProcess(command, 0, "", "")
+                return CompletedProcess(command, 0, "", "")
+
+            with (
+                patch("ha_pxe.runtime.run", side_effect=fake_run),
+                patch(
+                    "ha_pxe.runtime.capture_optional",
+                    return_value=f"{context.paths.tftp_dir}/serial\n{context.paths.tftp_dir}/short",
+                ),
+            ):
+                shutdown(context)
+
+            self.assertIn(["rpc.nfsd", "0"], run_calls)
+            self.assertIn(["exportfs", "-au"], run_calls)
+            self.assertIn(["exportfs", "-f"], run_calls)
+            self.assertIn(["umount", "/proc/fs/nfsd"], run_calls)
+            self.assertIn(["umount", "/var/lib/nfs/rpc_pipefs"], run_calls)
+            self.assertIn(["umount", f"{context.paths.tftp_dir}/short"], run_calls)
+            self.assertIn(["umount", f"{context.paths.tftp_dir}/serial"], run_calls)
+            self.assertEqual(process_one.wait_calls, 1)
+            self.assertEqual(process_two.wait_calls, 1)
+            self.assertEqual(context.background_processes, [])
 
 
 if __name__ == "__main__":

@@ -6,14 +6,20 @@ import json
 import filecmp
 import os
 import shutil
+import subprocess
 import tempfile
 import time
 from pathlib import Path
 
 from .addon_context import AddonContext
-from .errors import HaPxeError
+from .errors import CommandError, HaPxeError
 from .fs_utils import atomic_write, clear_directory, ensure_directory
 from .shell import capture, capture_optional, run, spawn
+
+NFS_RPC_PIPEFS = Path("/var/lib/nfs/rpc_pipefs")
+NFS_PROC_FS = Path("/proc/fs/nfsd")
+NFS_THREAD_COUNT = "8"
+PROCESS_SHUTDOWN_TIMEOUT_SECONDS = 5
 
 
 def ensure_directories(context: AddonContext) -> None:
@@ -190,14 +196,15 @@ def start_client_log_transport(context: AddonContext) -> None:
 
 
 def start_nfs_server(context: AddonContext) -> None:
-    ensure_directory(Path("/var/lib/nfs/rpc_pipefs"))
-    ensure_directory(Path("/proc/fs/nfsd"))
-    shutil.copy2(context.paths.exports_file, Path("/etc/exports"))
+    ensure_directory(NFS_RPC_PIPEFS)
+    ensure_directory(NFS_PROC_FS)
+    if run(["mountpoint", "-q", str(NFS_RPC_PIPEFS)], check=False).returncode != 0:
+        run(["mount", "-t", "rpc_pipefs", "sunrpc", str(NFS_RPC_PIPEFS)])
+    if run(["mountpoint", "-q", str(NFS_PROC_FS)], check=False).returncode != 0:
+        run(["mount", "-t", "nfsd", "nfsd", str(NFS_PROC_FS)])
 
-    if run(["mountpoint", "-q", "/var/lib/nfs/rpc_pipefs"], check=False).returncode != 0:
-        run(["mount", "-t", "rpc_pipefs", "sunrpc", "/var/lib/nfs/rpc_pipefs"])
-    if run(["mountpoint", "-q", "/proc/fs/nfsd"], check=False).returncode != 0:
-        run(["mount", "-t", "nfsd", "nfsd", "/proc/fs/nfsd"])
+    _reset_nfs_server_state(context)
+    shutil.copy2(context.paths.exports_file, Path("/etc/exports"))
 
     rpcbind = spawn(["rpcbind", "-f", "-w"])
     context.background_processes.append(rpcbind)
@@ -205,7 +212,7 @@ def start_nfs_server(context: AddonContext) -> None:
     run(["exportfs", "-ra"])
     mountd = spawn(["rpc.mountd", "-F", "--manage-gids"])
     context.background_processes.append(mountd)
-    run(["rpc.nfsd", "8"])
+    _start_nfs_threads(context)
     context.logger.info("NFS exports are active")
 
 
@@ -236,9 +243,8 @@ def start_tftp_server(context: AddonContext, server_ip: str) -> None:
 
 
 def shutdown(context: AddonContext) -> None:
-    for process in context.background_processes:
-        if process.poll() is None:
-            process.terminate()
+    _terminate_background_processes(context)
+    _reset_nfs_server_state(context, unmount=True)
     for mount_point in reversed(_tftp_mounts(context)):
         run(["umount", mount_point], check=False)
 
@@ -247,3 +253,63 @@ def _tftp_mounts(context: AddonContext) -> list[str]:
     output = capture_optional(["findmnt", "-rn", "-o", "TARGET"])
     root = f"{context.paths.tftp_dir}/"
     return [line for line in output.splitlines() if line.startswith(root)]
+
+
+def _start_nfs_threads(context: AddonContext) -> None:
+    completed = run(["rpc.nfsd", NFS_THREAD_COUNT], check=False, capture_output=True)
+    if completed.returncode == 0:
+        return
+
+    detail = _command_output(completed)
+    if detail:
+        context.logger.warning(
+            f"rpc.nfsd failed on the first attempt; resetting NFS state and retrying once ({detail})"
+        )
+    else:
+        context.logger.warning("rpc.nfsd failed on the first attempt; resetting NFS state and retrying once")
+
+    _reset_nfs_server_state(context)
+    run(["exportfs", "-ra"])
+    completed = run(["rpc.nfsd", NFS_THREAD_COUNT], check=False, capture_output=True)
+    if completed.returncode != 0:
+        raise CommandError(["rpc.nfsd", NFS_THREAD_COUNT], completed.returncode, completed.stderr or completed.stdout or "")
+
+
+def _reset_nfs_server_state(context: AddonContext, *, unmount: bool = False) -> None:
+    if _mountpoint_active(NFS_PROC_FS):
+        run(["rpc.nfsd", "0"], check=False, capture_output=True)
+
+    run(["exportfs", "-au"], check=False, capture_output=True)
+    run(["exportfs", "-f"], check=False, capture_output=True)
+
+    if not unmount:
+        return
+
+    for mount_point in (NFS_PROC_FS, NFS_RPC_PIPEFS):
+        if _mountpoint_active(mount_point):
+            run(["umount", str(mount_point)], check=False)
+
+
+def _mountpoint_active(path: Path) -> bool:
+    return run(["mountpoint", "-q", str(path)], check=False).returncode == 0
+
+
+def _command_output(completed: subprocess.CompletedProcess[str]) -> str:
+    return (completed.stderr or completed.stdout or "").replace("\n", " ").strip()
+
+
+def _terminate_background_processes(context: AddonContext) -> None:
+    for process in reversed(context.background_processes):
+        if process.poll() is None:
+            process.terminate()
+
+    for process in reversed(context.background_processes):
+        if process.poll() is not None:
+            continue
+        try:
+            process.wait(timeout=PROCESS_SHUTDOWN_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
+
+    context.background_processes.clear()
