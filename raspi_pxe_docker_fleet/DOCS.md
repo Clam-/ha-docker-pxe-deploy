@@ -24,7 +24,7 @@ Each configured client gets:
 
 ```yaml
 log_level: info
-server_ip: 192.168.25.250
+server_ip: 
 default_username: pi
 default_password: ""
 default_timezone: Australia/Melbourne
@@ -34,18 +34,18 @@ enable_i2c: true
 boot_config_lines: |
   dtoverlay=gpio-no-bank0-irq
 ssh_authorized_keys: |
-  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN lee@example-macbook
+  ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6A4C2WQY0gVxk7bP5fA8Bf4m3jX9pW5rP8YqL3m7wN user@example
 clients:
   - serial: "cdc843d7"
     model: pi3
     hostname: janky
     image_arch: arm64
     rebuild: false
-    enable_i2c: true
     containers: |
       [
         {
           "name": "rgpiod",
+          "container_name": "rgpiod",
           "image": "local/rgpiod:latest",
           "source": {
             "type": "git",
@@ -62,11 +62,14 @@ clients:
             "8889:8889"
           ],
           "devices": [
-            "/dev/gpiochip0:/dev/gpiochip0"
+            "/dev/gpiochip0:/dev/gpiochip0",
+            "/dev/i2c-1:/dev/i2c-1",
+            "/dev/i2c-2:/dev/i2c-2"
           ]
         },
         {
           "name": "janky-thermostat",
+          "container_name": "janky-thermostat",
           "source": {
             "type": "git",
             "url": "https://github.com/Clam-/ha-pxe-janky-thermostat.git",
@@ -80,13 +83,8 @@ clients:
           "env": {
             "MQTT_BROKER": "mosquitto",
             "MQTT_PORT": "1883",
-            "PIGPIO_ADDR": "host.docker.internal",
-            "PIGPIO_PORT": "8889",
             "I2C_BUS": "0"
           },
-          "extra_hosts": [
-            "host.docker.internal:host-gateway"
-          ],
           "files": [
             {
               "container_path": "/config/config.json",
@@ -107,8 +105,8 @@ clients:
                 "updaterate": 15,
                 "updir": 1,
                 "i2c_bus": 0,
-                "pigpio_addr": "host.docker.internal",
-                "pigpio_port": 8889,
+                "rgpio_addr": "rgpiod",
+                "rgpio_port": 8889,
                 "loglevel": "WARNING"
               }
             }
@@ -190,11 +188,12 @@ Use a JSON array when the container needs runtime configuration.
 
 Top-level container fields:
 
-- `name`: Recommended. Must be unique per client.
+- `name`: Recommended. Must be unique per client. If `container_name` is omitted, this is also used as the Docker container name and the bridge-network DNS name.
+- `container_name`: Optional explicit Docker container name override.
 - `source`: String shorthand or an object. If omitted, `image` is treated as a pulled registry image.
 - `image`: Optional output tag for build-based sources. For pulled images, this is the registry image ref.
 - `restart`: Docker restart policy. Defaults to `unless-stopped`.
-- `network_mode`: Optional Docker network mode such as `host`.
+- `network_mode`: Optional Docker network mode such as `host`. If omitted, the client attaches the container to a managed user-defined bridge network with normal outbound network access and inter-container DNS.
 - `privileged`: Optional boolean.
 - `workdir`: Optional working directory inside the container.
 - `depends_on`: Optional array of managed container names, or an object using those names as keys. Dependencies only affect reconciliation order.
@@ -228,13 +227,14 @@ Each child container also receives MQTT defaults when the MQTT service is config
 
 ## Thermostat plus `rgpiod` example
 
-The `ha-pxe-janky-thermostat` repo can be deployed alongside `docker-rgpio`, with `depends_on` ensuring the GPIO daemon is reconciled first:
+The `ha-pxe-janky-thermostat` repo can be deployed alongside `docker-rgpio`, with `depends_on` ensuring the GPIO daemon is reconciled first. By default, managed containers join the same user-defined bridge network, so the thermostat can reach `rgpiod` by name without any host alias:
 
 ```yaml
 containers: |
   [
     {
       "name": "rgpiod",
+      "container_name": "rgpiod",
       "image": "local/rgpiod:latest",
       "source": {
         "type": "git",
@@ -251,11 +251,14 @@ containers: |
         "8889:8889"
       ],
       "devices": [
-        "/dev/gpiochip0:/dev/gpiochip0"
+        "/dev/gpiochip0:/dev/gpiochip0",
+        "/dev/i2c-1:/dev/i2c-1",
+        "/dev/i2c-2:/dev/i2c-2"
       ]
     },
     {
       "name": "janky-thermostat",
+      "container_name": "janky-thermostat",
       "source": {
         "type": "git",
         "url": "https://github.com/Clam-/ha-pxe-janky-thermostat.git",
@@ -268,12 +271,8 @@ containers: |
       ],
       "env": {
         "MQTT_BROKER": "mosquitto",
-        "PIGPIO_ADDR": "host.docker.internal",
-        "PIGPIO_PORT": "8889"
+        "MQTT_PORT": "1883"
       },
-      "extra_hosts": [
-        "host.docker.internal:host-gateway"
-      ],
       "files": [
         {
           "container_path": "/config/config.json",
@@ -292,8 +291,8 @@ containers: |
             "updaterate": 15,
             "updir": 1,
             "i2c_bus": 0,
-            "pigpio_addr": "host.docker.internal",
-            "pigpio_port": 8889,
+            "rgpio_addr": "rgpiod",
+            "rgpio_port": 8889,
             "loglevel": "WARNING"
           }
         }
@@ -305,11 +304,12 @@ containers: |
 That causes the Raspberry Pi client to:
 
 1. Clone or update the `docker-rgpio` Git repo locally and build it on the Pi.
-2. Start `rgpiod` with the requested GPIO device mappings and published port.
+2. Start `rgpiod` with the requested GPIO and I2C device mappings and published port.
 3. Clone or update the thermostat repo and build it on the Pi.
 4. Write the thermostat JSON config file under its managed state directory.
 5. Bind-mount that file to `/config/config.json`.
-6. Recreate either container when its repo, build args, or runtime spec changes.
+6. Attach both containers to the managed bridge network so `rgpiod` resolves directly by name.
+7. Recreate either container when its repo, build args, or runtime spec changes.
 
 ## Prebuilt image workflow
 
@@ -326,6 +326,7 @@ containers: |
   [
     {
       "name": "rgpiod",
+      "container_name": "rgpiod",
       "image": "registry.home.arpa:5000/pxe/rgpiod:stable-arm64",
       "env": {
         "RGPIOD_PORT": "8889",
@@ -335,23 +336,22 @@ containers: |
         "8889:8889"
       ],
       "devices": [
-        "/dev/gpiochip0:/dev/gpiochip0"
+        "/dev/gpiochip0:/dev/gpiochip0",
+        "/dev/i2c-1:/dev/i2c-1",
+        "/dev/i2c-2:/dev/i2c-2"
       ]
     },
     {
       "name": "janky-thermostat",
+      "container_name": "janky-thermostat",
       "image": "registry.home.arpa:5000/pxe/janky-thermostat:stable-arm64",
       "depends_on": [
         "rgpiod"
       ],
       "env": {
         "MQTT_BROKER": "mosquitto",
-        "PIGPIO_ADDR": "host.docker.internal",
-        "PIGPIO_PORT": "8889"
+        "MQTT_PORT": "1883"
       },
-      "extra_hosts": [
-        "host.docker.internal:host-gateway"
-      ],
       "files": [
         {
           "container_path": "/config/config.json",
@@ -370,8 +370,8 @@ containers: |
             "updaterate": 15,
             "updir": 1,
             "i2c_bus": 0,
-            "pigpio_addr": "host.docker.internal",
-            "pigpio_port": 8889,
+            "rgpio_addr": "rgpiod",
+            "rgpio_port": 8889,
             "loglevel": "WARNING"
           }
         }

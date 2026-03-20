@@ -12,6 +12,7 @@ from .container_engine import (
     describe_managed_containers,
     describe_state_dirs,
     ensure_docker_running,
+    ensure_managed_network,
     load_desired_specs,
     reconcile_container,
     spec_key,
@@ -43,6 +44,11 @@ def main() -> int:
         ensure_docker_running(logger)
         paths.state_root.mkdir(parents=True, exist_ok=True)
         logger.stage_complete("docker", "Docker is ready and state directories exist")
+
+        if any(not spec.get("network_mode") for spec in specs):
+            logger.stage_start("network", "Ensuring the managed Docker bridge network is available")
+            ensure_managed_network(logger, config.serial)
+            logger.stage_complete("network", "Managed Docker bridge network is ready")
 
         desired_keys: dict[str, int] = {}
         desired_names: dict[str, str] = {}
@@ -79,4 +85,3 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         logger.fail_exception(exc)
         return 1
-

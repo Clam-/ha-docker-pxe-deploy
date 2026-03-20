@@ -116,7 +116,7 @@ definition with:
 - `url: https://github.com/Clam-/ha-pxe-janky-thermostat.git` for the thermostat
 - `dockerfile: Dockerfile` for each Git-backed build
 - generated `files` content for `/config/config.json`
-- any required runtime `env` and `extra_hosts` overrides such as MQTT and pigpio endpoints
+- any required runtime `env`, `devices`, and generated config for MQTT and rgpio endpoints
 
 ## Notes
 

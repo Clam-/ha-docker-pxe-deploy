@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from .errors import SpecError
-from .text import slug
+from .text import sanitize_token, slug
 
 
 GIT_HTTP_RE = re.compile(r"^https?://.+\.git(?:#.*)?$")
@@ -21,6 +21,9 @@ def normalize_container_specs(raw: str | None, mqtt_env: dict[str, str] | None =
     names = [item["name"] for item in items]
     if len(names) != len(set(names)):
         raise SpecError("container names must be unique; set an explicit name when sources would infer the same one")
+    explicit_container_names = [item["container_name"] for item in items if item["container_name"]]
+    if len(explicit_container_names) != len(set(explicit_container_names)):
+        raise SpecError("explicit container_name values must be unique")
     return sort_container_specs(items)
 
 
@@ -102,6 +105,7 @@ def _normalize_item(item: Any, mqtt_env: dict[str, str]) -> dict[str, Any]:
 
     normalized = {
         "name": name,
+        "container_name": _normalize_container_name(raw_item.get("container_name")),
         "image": source["ref"] if source["type"] == "image" else image,
         "source": source,
         "restart": str(raw_item.get("restart", "unless-stopped")),
@@ -119,6 +123,12 @@ def _normalize_item(item: Any, mqtt_env: dict[str, str]) -> dict[str, Any]:
         "command": _normalize_command(raw_item.get("command")),
     }
     return normalized
+
+
+def _normalize_container_name(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    return sanitize_token(str(value), default="container")
 
 
 def _normalize_source(value: Any, image_override: Any) -> dict[str, Any]:
@@ -317,4 +327,3 @@ def _normalize_files(value: Any) -> list[dict[str, Any]]:
             }
         )
     return normalized
-

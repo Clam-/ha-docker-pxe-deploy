@@ -19,6 +19,8 @@ from ..shell import run
 from ..text import slug, stable_json
 from .logging import ClientLogger
 
+MANAGED_DOCKER_NETWORK_NAME = "ha-pxe-managed"
+
 
 @dataclass
 class BuildInputs:
@@ -53,7 +55,10 @@ def spec_key(spec: dict[str, Any]) -> str:
 
 
 def container_name_for_spec(spec: dict[str, Any]) -> str:
-    return f"ha-pxe-{spec_key(spec)}"
+    explicit_name = str(spec.get("container_name", "") or "").strip()
+    if explicit_name:
+        return explicit_name
+    return str(spec["name"])
 
 
 def container_dir_for_spec(state_root: Path, spec: dict[str, Any]) -> Path:
@@ -111,6 +116,28 @@ def reconcile_container(
     except Exception as exc:
         logger.stage_fail(stage_name, f"Failed to reconcile container {display_name}: {exc}")
         raise
+
+
+def ensure_managed_network(logger: ClientLogger, serial: str) -> None:
+    if _capture_optional(["docker", "network", "inspect", MANAGED_DOCKER_NETWORK_NAME]):
+        logger.info(f"Managed Docker bridge network {MANAGED_DOCKER_NETWORK_NAME} is already present")
+        return
+    logger.info(f"Creating managed Docker bridge network {MANAGED_DOCKER_NETWORK_NAME}")
+    run(
+        [
+            "docker",
+            "network",
+            "create",
+            "--driver",
+            "bridge",
+            "--label",
+            "io.ha_pxe.managed=true",
+            "--label",
+            f"io.ha_pxe.client_serial={serial}",
+            MANAGED_DOCKER_NETWORK_NAME,
+        ]
+    )
+    logger.info(f"Created managed Docker bridge network {MANAGED_DOCKER_NETWORK_NAME}")
 
 
 def cleanup_stale_containers(desired_keys: dict[str, int], logger: ClientLogger, serial: str) -> None:
@@ -353,6 +380,8 @@ def run_container(
         command.append("--privileged")
     if spec.get("network_mode"):
         command.extend(["--network", str(spec["network_mode"])])
+    else:
+        command.extend(["--network", MANAGED_DOCKER_NETWORK_NAME, "--network-alias", str(spec["name"])])
     if spec.get("workdir"):
         command.extend(["--workdir", str(spec["workdir"])])
     for env_key, env_value in spec.get("env", {}).items():
