@@ -61,6 +61,8 @@ class PrepareNetworkManagerRootfsTests(unittest.TestCase):
             networkmanager_service = root_dir / "usr" / "lib" / "systemd" / "system" / "NetworkManager.service"
             networkmanager_service.parent.mkdir(parents=True)
             networkmanager_service.write_text("[Unit]\nDescription=NetworkManager\n", encoding="utf-8")
+            wait_online_service = root_dir / "usr" / "lib" / "systemd" / "system" / "NetworkManager-wait-online.service"
+            wait_online_service.write_text("[Unit]\nDescription=NetworkManager wait online\n", encoding="utf-8")
 
             multi_user_wants = root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants"
             network_online_wants = root_dir / "etc" / "systemd" / "system" / "network-online.target.wants"
@@ -82,6 +84,11 @@ class PrepareNetworkManagerRootfsTests(unittest.TestCase):
             self.assertEqual(
                 (multi_user_wants / "NetworkManager.service").readlink(),
                 Path("/usr/lib/systemd/system/NetworkManager.service"),
+            )
+            self.assertTrue((network_online_wants / "NetworkManager-wait-online.service").is_symlink())
+            self.assertEqual(
+                (network_online_wants / "NetworkManager-wait-online.service").readlink(),
+                Path("/usr/lib/systemd/system/NetworkManager-wait-online.service"),
             )
             for service in ("dhcpcd.service", "networking.service", "systemd-networkd.service"):
                 service_path = root_dir / "etc" / "systemd" / "system" / service

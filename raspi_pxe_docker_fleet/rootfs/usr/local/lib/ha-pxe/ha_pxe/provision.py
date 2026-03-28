@@ -66,6 +66,7 @@ I2C_VC_CONFIG_ENABLED_LINE = "dtparam=i2c_vc=on"
 I2C_VC_CONFIG_DISABLED_LINE = f"#{I2C_VC_CONFIG_ENABLED_LINE}"
 I2C_MODULE_LINE = "i2c-dev"
 NETWORKMANAGER_RESOLV_CONF = "/run/NetworkManager/resolv.conf"
+NETWORKMANAGER_WAIT_ONLINE_SERVICE = "NetworkManager-wait-online.service"
 NETWORKMANAGER_CONFLICTING_SERVICES = (
     "dhcpcd.service",
     "networking.service",
@@ -415,6 +416,7 @@ def _prepare_networkmanager_rootfs(root_dir: Path) -> None:
     atomic_write(root_dir / "etc" / "NetworkManager" / "conf.d" / "90-ha-pxe.conf", NETWORKMANAGER_CONFIG, 0o644)
     replace_symlink(root_dir / "etc" / "resolv.conf", NETWORKMANAGER_RESOLV_CONF)
     _enable_rootfs_service(root_dir, "NetworkManager.service")
+    _enable_rootfs_service(root_dir, NETWORKMANAGER_WAIT_ONLINE_SERVICE, wanted_by="network-online.target.wants")
 
     for service in NETWORKMANAGER_CONFLICTING_SERVICES:
         replace_symlink(root_dir / "etc" / "systemd" / "system" / service, "/dev/null")
@@ -422,7 +424,7 @@ def _prepare_networkmanager_rootfs(root_dir: Path) -> None:
         (root_dir / "etc" / "systemd" / "system" / "network-online.target.wants" / service).unlink(missing_ok=True)
 
 
-def _enable_rootfs_service(root_dir: Path, service: str) -> None:
+def _enable_rootfs_service(root_dir: Path, service: str, *, wanted_by: str = "multi-user.target.wants") -> None:
     service_mask_path = root_dir / "etc" / "systemd" / "system" / service
     if service_mask_path.is_symlink() and service_mask_path.readlink() == Path("/dev/null"):
         service_mask_path.unlink()
@@ -434,7 +436,7 @@ def _enable_rootfs_service(root_dir: Path, service: str) -> None:
     ):
         if service_path.exists():
             replace_symlink(
-                root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants" / service,
+                root_dir / "etc" / "systemd" / "system" / wanted_by / service,
                 service_path.as_posix().removeprefix(root_dir.as_posix()),
             )
             return

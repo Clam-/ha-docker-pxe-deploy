@@ -1,7 +1,7 @@
 [Unit]
 Description=Home Assistant PXE client first boot provisioning
-Wants=network-online.target
-After=network-online.target cloud-final.service ha-pxe-early-log.service
+Wants=network-online.target NetworkManager-wait-online.service
+After=network-online.target NetworkManager-wait-online.service cloud-final.service ha-pxe-early-log.service
 ConditionPathExists=/etc/ha-pxe/bootstrap.env
 ConditionPathExists=!/var/lib/ha-pxe/firstboot.done
 
