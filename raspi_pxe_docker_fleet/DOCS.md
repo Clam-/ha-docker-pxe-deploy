@@ -25,7 +25,6 @@ Each configured client gets:
 ```yaml
 log_level: info
 server_ip: 
-mqtt_host_suffix: home.nyanya.org
 default_username: pi
 default_password: ""
 default_timezone: Australia/Melbourne
@@ -119,7 +118,6 @@ clients:
 
 - `log_level`: `error`, `warn`, `info`, or `debug`.
 - `server_ip`: Optional override for the IP address clients should use for TFTP and NFS.
-- `mqtt_host_suffix`: Optional DNS suffix appended to `MQTT_HOST` and `MQTT_BROKER` when the Home Assistant host hostname is not already fully qualified.
 - `default_username`: User created on each Raspberry Pi at first boot.
 - `default_password`: Optional password for that user.
 - `default_timezone`: Optional IANA timezone name to apply on first boot.
@@ -201,7 +199,7 @@ Top-level container fields:
 - `command`: Optional string or array appended after the image name.
 - `files`: Array of generated files to materialize on the client and bind-mount into the container.
 
-Each child container also receives MQTT defaults when the MQTT service is configured for the add-on. The add-on injects `MQTT_PORT`, `MQTT_USERNAME`, and `MQTT_PASSWORD` from the Home Assistant MQTT service. It also injects `MQTT_BROKER` and `MQTT_HOST` using the Home Assistant host hostname from the Supervisor host API. If `mqtt_host_suffix` is configured and the hostname is not already fully qualified, that suffix is appended before injection. Explicit `env` entries in a container spec override those defaults. If the host hostname is unavailable, `MQTT_BROKER` and `MQTT_HOST` are left unset.
+Each child container also receives MQTT defaults when the MQTT service is configured for the add-on. The add-on injects `MQTT_PORT`, `MQTT_USERNAME`, and `MQTT_PASSWORD` from the Home Assistant MQTT service. It also injects `MQTT_BROKER` and `MQTT_HOST` using the Home Assistant host hostname from the Supervisor host API. Explicit `env` entries in a container spec override those defaults. If the host hostname is unavailable, `MQTT_BROKER` and `MQTT_HOST` are left unset.
 
 `source` object fields:
 

@@ -66,6 +66,27 @@ def container_dir_for_spec(state_root: Path, spec: dict[str, Any]) -> Path:
     return state_root / spec_key(spec)
 
 
+def host_resolver_search_domains(path: Path | None = None) -> list[str]:
+    resolv_path = path or Path("/etc/resolv.conf")
+    try:
+        lines = resolv_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    for raw_line in lines:
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        if parts[0] == "search":
+            return [entry.rstrip(".") for entry in parts[1:] if entry.rstrip(".")]
+        if parts[0] == "domain":
+            return [parts[1].rstrip(".")] if parts[1].rstrip(".") else []
+    return []
+
+
 def spec_hash(spec: dict[str, Any]) -> str:
     runtime_spec = dict(spec)
     runtime_spec["files"] = _generated_file_mount_topology(spec)
@@ -529,6 +550,8 @@ def run_container(
         command.extend(["--device", str(device)])
     for host in spec.get("extra_hosts", []):
         command.extend(["--add-host", str(host)])
+    for domain in host_resolver_search_domains():
+        command.extend(["--dns-search", domain])
     for port in spec.get("ports", []):
         command.extend(["-p", str(port)])
     for volume in spec.get("volumes", []):

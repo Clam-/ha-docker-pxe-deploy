@@ -65,6 +65,19 @@ I2C_ARM_CONFIG_DISABLED_LINE = f"#{I2C_ARM_CONFIG_ENABLED_LINE}"
 I2C_VC_CONFIG_ENABLED_LINE = "dtparam=i2c_vc=on"
 I2C_VC_CONFIG_DISABLED_LINE = f"#{I2C_VC_CONFIG_ENABLED_LINE}"
 I2C_MODULE_LINE = "i2c-dev"
+NETWORKMANAGER_RESOLV_CONF = "/run/NetworkManager/resolv.conf"
+NETWORKMANAGER_CONFLICTING_SERVICES = (
+    "dhcpcd.service",
+    "networking.service",
+    "systemd-networkd.service",
+)
+NETWORKMANAGER_CONFIG = (
+    "# Managed by HA-PXE\n"
+    "[main]\n"
+    "dns=default\n\n"
+    "[ifupdown]\n"
+    "managed=true\n"
+)
 
 
 def provision_client(context: AddonContext, client: dict[str, object], server_ip: str) -> None:
@@ -139,13 +152,14 @@ def provision_client(context: AddonContext, client: dict[str, object], server_ip
     _rewrite_modules_conf(context, root_dir, enable_i2c or enable_i2c_vc)
     _rewrite_fstab(root_dir, server_ip, boot_dir)
     _disable_swap_for_network_root(root_dir)
+    _prepare_networkmanager_rootfs(root_dir)
     _log_stage(
         context,
         "info",
         serial,
         "boot-config",
         "completed",
-        "PXE boot configuration updated, I2C defaults applied, managed main config.txt entries applied, and swap disabled for network-root clients",
+        "PXE boot configuration updated, I2C defaults applied, swap disabled, and NetworkManager prepared as the sole network owner",
     )
 
     _log_stage(context, "info", serial, "bootstrap", "started", "Installing first-boot and container-sync bootstrap assets")
@@ -390,6 +404,40 @@ def _disable_stock_firstboot_services(root_dir: Path) -> None:
     banner_path = root_dir / "usr" / "share" / "userconf-pi" / "sshd_banner"
     if banner_path.exists():
         atomic_write(banner_path, "")
+
+
+def _prepare_networkmanager_rootfs(root_dir: Path) -> None:
+    ensure_directory(root_dir / "etc" / "NetworkManager" / "conf.d")
+    ensure_directory(root_dir / "etc" / "systemd" / "system")
+    ensure_directory(root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants")
+    ensure_directory(root_dir / "etc" / "systemd" / "system" / "network-online.target.wants")
+
+    atomic_write(root_dir / "etc" / "NetworkManager" / "conf.d" / "90-ha-pxe.conf", NETWORKMANAGER_CONFIG, 0o644)
+    replace_symlink(root_dir / "etc" / "resolv.conf", NETWORKMANAGER_RESOLV_CONF)
+    _enable_rootfs_service(root_dir, "NetworkManager.service")
+
+    for service in NETWORKMANAGER_CONFLICTING_SERVICES:
+        replace_symlink(root_dir / "etc" / "systemd" / "system" / service, "/dev/null")
+        (root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants" / service).unlink(missing_ok=True)
+        (root_dir / "etc" / "systemd" / "system" / "network-online.target.wants" / service).unlink(missing_ok=True)
+
+
+def _enable_rootfs_service(root_dir: Path, service: str) -> None:
+    service_mask_path = root_dir / "etc" / "systemd" / "system" / service
+    if service_mask_path.is_symlink() and service_mask_path.readlink() == Path("/dev/null"):
+        service_mask_path.unlink()
+
+    for service_path in (
+        root_dir / "etc" / "systemd" / "system" / service,
+        root_dir / "usr" / "lib" / "systemd" / "system" / service,
+        root_dir / "lib" / "systemd" / "system" / service,
+    ):
+        if service_path.exists():
+            replace_symlink(
+                root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants" / service,
+                service_path.as_posix().removeprefix(root_dir.as_posix()),
+            )
+            return
 
 
 def _write_bootstrap_files(
