@@ -132,6 +132,16 @@ class ContainerEngineTests(unittest.TestCase):
             resolv_path.write_text("domain home.nyanya.org.\n", encoding="utf-8")
             self.assertEqual(host_resolver_search_domains(resolv_path), ["home.nyanya.org"])
 
+    def test_host_resolver_search_domains_falls_back_to_kernel_dhcp_domain(self) -> None:
+        with patch(
+            "ha_pxe.client.container_engine.read_kernel_dhcp_resolver_config",
+            return_value=type("Config", (), {"search_domains": ["home.nyanya.org"]})(),
+        ):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                resolv_path = Path(tmpdir) / "resolv.conf"
+                resolv_path.write_text("nameserver 192.168.25.1\n", encoding="utf-8")
+                self.assertEqual(host_resolver_search_domains(resolv_path), ["home.nyanya.org"])
+
     def test_ensure_managed_network_creates_bridge_when_missing(self) -> None:
         logger = _FakeLogger()
         commands: list[list[str]] = []

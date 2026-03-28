@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 
-from ..fs_utils import replace_symlink
+from ..fs_utils import atomic_write
+from ..resolver import KERNEL_DHCP_PNP_PATH, read_kernel_dhcp_resolver_config, render_resolv_conf
 from ..shell import run
 from .bootstrap import BootstrapConfig, ClientPaths, clear_stock_ssh_banner, configure_ssh_keys
 from .locale_setup import apply_locale_defaults
 from .logging import ClientLogger
 
-NETWORKMANAGER_RESOLV_CONF = "/run/NetworkManager/resolv.conf"
+RESOLV_CONF_PATH = "/etc/resolv.conf"
 
 
 def main() -> int:
@@ -37,9 +37,13 @@ def main() -> int:
         apply_locale_defaults(config, logger)
         logger.stage_complete("locale-defaults", "Locale, timezone, and keyboard defaults applied")
 
-        logger.stage_start("network-manager", "Verifying the provisioned NetworkManager-owned resolver setup")
-        managed_resolver_target = ensure_networkmanager_ready(logger)
-        logger.stage_complete("network-manager", f"NetworkManager is active and resolver configuration now follows {managed_resolver_target}")
+        logger.stage_start("network-manager", "Verifying NetworkManager.service is active for post-boot network management")
+        ensure_networkmanager_ready(logger)
+        logger.stage_complete("network-manager", "NetworkManager.service is active")
+
+        logger.stage_start("resolver", "Writing /etc/resolv.conf from kernel DHCP boot data")
+        resolv_conf_path = ensure_kernel_dhcp_resolver(logger)
+        logger.stage_complete("resolver", f"Kernel DHCP resolver configuration written to {resolv_conf_path}")
 
         logger.stage_start("packages", "Installing Docker and bootstrap dependencies")
         _install_packages(logger)
@@ -64,57 +68,28 @@ def main() -> int:
         return 1
 
 
-def ensure_networkmanager_ready(logger: ClientLogger, root: Path | None = None) -> str:
+def ensure_networkmanager_ready(logger: ClientLogger, root: Path | None = None) -> None:
     if root is None and run(["systemctl", "is-active", "--quiet", "NetworkManager.service"], check=False).returncode != 0:
         raise RuntimeError("NetworkManager.service is not active")
     logger.info("Verified NetworkManager.service is active")
-    return ensure_networkmanager_resolver(logger, root=root)
 
 
-def ensure_networkmanager_resolver(
+def ensure_kernel_dhcp_resolver(
     logger: ClientLogger,
     root: Path | None = None,
-    *,
-    attempts: int = 10,
-    delay_seconds: float = 1.0,
 ) -> str:
     client_root = root or Path("/")
-    resolv_path = client_root / "etc" / "resolv.conf"
-    desired_target = _networkmanager_resolv_conf_target(client_root, attempts=attempts, delay_seconds=delay_seconds)
-    if not desired_target:
-        raise RuntimeError("NetworkManager is active but did not create /run/NetworkManager/resolv.conf")
+    pnp_path = client_root / KERNEL_DHCP_PNP_PATH.lstrip("/")
+    resolver_config = read_kernel_dhcp_resolver_config(pnp_path)
+    if not resolver_config.nameservers:
+        raise RuntimeError("Kernel DHCP boot data did not provide any nameserver entries in /proc/net/pnp")
 
-    if _resolv_conf_points_to(client_root, resolv_path, desired_target):
-        logger.info(f"/etc/resolv.conf already points to {desired_target}")
-        return desired_target
-
-    replace_symlink(resolv_path, desired_target)
-    logger.info(f"/etc/resolv.conf now points to {desired_target}")
-    return desired_target
-
-
-def _networkmanager_resolv_conf_target(root: Path, attempts: int = 10, delay_seconds: float = 1.0) -> str:
-    target_path = root / NETWORKMANAGER_RESOLV_CONF.lstrip("/")
-    for attempt in range(attempts):
-        if target_path.is_file():
-            return NETWORKMANAGER_RESOLV_CONF
-        if attempt + 1 < attempts:
-            time.sleep(delay_seconds)
-    return ""
-
-
-def _resolv_conf_points_to(root: Path, resolv_path: Path, target: str) -> bool:
-    if not resolv_path.is_symlink():
-        return False
-    try:
-        current_target = resolv_path.readlink()
-    except OSError:
-        return False
-
-    desired_path = (root / target.lstrip("/")).resolve()
-    if current_target.is_absolute():
-        return current_target == Path(target) or current_target.resolve() == desired_path
-    return (resolv_path.parent / current_target).resolve() == desired_path
+    resolv_path = client_root / RESOLV_CONF_PATH.lstrip("/")
+    atomic_write(resolv_path, render_resolv_conf(resolver_config), 0o644)
+    logger.info(
+        f"/etc/resolv.conf updated from kernel DHCP boot data with {len(resolver_config.nameservers)} nameserver(s)"
+    )
+    return RESOLV_CONF_PATH
 
 
 def _configure_identity(config: BootstrapConfig, logger: ClientLogger) -> None:

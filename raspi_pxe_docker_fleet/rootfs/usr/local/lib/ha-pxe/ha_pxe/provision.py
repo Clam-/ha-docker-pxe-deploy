@@ -65,7 +65,6 @@ I2C_ARM_CONFIG_DISABLED_LINE = f"#{I2C_ARM_CONFIG_ENABLED_LINE}"
 I2C_VC_CONFIG_ENABLED_LINE = "dtparam=i2c_vc=on"
 I2C_VC_CONFIG_DISABLED_LINE = f"#{I2C_VC_CONFIG_ENABLED_LINE}"
 I2C_MODULE_LINE = "i2c-dev"
-NETWORKMANAGER_RESOLV_CONF = "/run/NetworkManager/resolv.conf"
 NETWORKMANAGER_WAIT_ONLINE_SERVICE = "NetworkManager-wait-online.service"
 NETWORKMANAGER_CONFLICTING_SERVICES = (
     "dhcpcd.service",
@@ -79,6 +78,7 @@ NETWORKMANAGER_CONFIG = (
     "[ifupdown]\n"
     "managed=true\n"
 )
+RESOLV_CONF_PLACEHOLDER = "# Managed by HA-PXE; populated from /proc/net/pnp on first boot\n"
 
 
 def provision_client(context: AddonContext, client: dict[str, object], server_ip: str) -> None:
@@ -414,7 +414,7 @@ def _prepare_networkmanager_rootfs(root_dir: Path) -> None:
     ensure_directory(root_dir / "etc" / "systemd" / "system" / "network-online.target.wants")
 
     atomic_write(root_dir / "etc" / "NetworkManager" / "conf.d" / "90-ha-pxe.conf", NETWORKMANAGER_CONFIG, 0o644)
-    replace_symlink(root_dir / "etc" / "resolv.conf", NETWORKMANAGER_RESOLV_CONF)
+    atomic_write(root_dir / "etc" / "resolv.conf", RESOLV_CONF_PLACEHOLDER, 0o644)
     _enable_rootfs_service(root_dir, "NetworkManager.service")
     _enable_rootfs_service(root_dir, NETWORKMANAGER_WAIT_ONLINE_SERVICE, wanted_by="network-online.target.wants")
 

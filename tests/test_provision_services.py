@@ -78,8 +78,11 @@ class PrepareNetworkManagerRootfsTests(unittest.TestCase):
                 (root_dir / "etc" / "NetworkManager" / "conf.d" / "90-ha-pxe.conf").read_text(encoding="utf-8"),
                 "# Managed by HA-PXE\n[main]\ndns=default\n\n[ifupdown]\nmanaged=true\n",
             )
-            self.assertTrue(resolv_path.is_symlink())
-            self.assertEqual(resolv_path.readlink(), Path("/run/NetworkManager/resolv.conf"))
+            self.assertFalse(resolv_path.is_symlink())
+            self.assertEqual(
+                resolv_path.read_text(encoding="utf-8"),
+                "# Managed by HA-PXE; populated from /proc/net/pnp on first boot\n",
+            )
             self.assertTrue((multi_user_wants / "NetworkManager.service").is_symlink())
             self.assertEqual(
                 (multi_user_wants / "NetworkManager.service").readlink(),

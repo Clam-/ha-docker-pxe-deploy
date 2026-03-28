@@ -15,6 +15,7 @@ from typing import Any
 from ..container_specs import sort_container_specs
 from ..errors import HaPxeError, SpecError
 from ..fs_utils import atomic_write, ensure_directory
+from ..resolver import read_kernel_dhcp_resolver_config, read_resolv_search_domains
 from ..shell import run
 from ..text import slug, stable_json
 from .logging import ClientLogger
@@ -67,24 +68,10 @@ def container_dir_for_spec(state_root: Path, spec: dict[str, Any]) -> Path:
 
 
 def host_resolver_search_domains(path: Path | None = None) -> list[str]:
-    resolv_path = path or Path("/etc/resolv.conf")
-    try:
-        lines = resolv_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return []
-
-    for raw_line in lines:
-        line = raw_line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        if parts[0] == "search":
-            return [entry.rstrip(".") for entry in parts[1:] if entry.rstrip(".")]
-        if parts[0] == "domain":
-            return [parts[1].rstrip(".")] if parts[1].rstrip(".") else []
-    return []
+    domains = read_resolv_search_domains(path)
+    if domains:
+        return domains
+    return read_kernel_dhcp_resolver_config().search_domains
 
 
 def spec_hash(spec: dict[str, Any]) -> str:
