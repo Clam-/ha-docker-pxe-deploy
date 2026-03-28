@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from ..fs_utils import atomic_write
@@ -44,6 +45,10 @@ def main() -> int:
         logger.stage_start("resolver", "Writing /etc/resolv.conf from kernel DHCP boot data")
         resolv_conf_path = ensure_kernel_dhcp_resolver(logger)
         logger.stage_complete("resolver", f"Kernel DHCP resolver configuration written to {resolv_conf_path}")
+
+        logger.stage_start("time-sync", "Waiting for system clock synchronization before apt operations")
+        wait_for_time_sync(logger)
+        logger.stage_complete("time-sync", "System clock is synchronized for package installation")
 
         logger.stage_start("packages", "Installing Docker and bootstrap dependencies")
         _install_packages(logger)
@@ -90,6 +95,34 @@ def ensure_kernel_dhcp_resolver(
         f"/etc/resolv.conf updated from kernel DHCP boot data with {len(resolver_config.nameservers)} nameserver(s)"
     )
     return RESOLV_CONF_PATH
+
+
+def wait_for_time_sync(
+    logger: ClientLogger,
+    *,
+    attempts: int = 180,
+    delay_seconds: float = 1.0,
+) -> None:
+    if run(["systemctl", "restart", "systemd-timesyncd.service"], check=False).returncode == 0:
+        logger.info("Restarted systemd-timesyncd.service after updating /etc/resolv.conf")
+    elif run(["systemctl", "is-active", "--quiet", "systemd-timesyncd.service"], check=False).returncode == 0:
+        logger.info("systemd-timesyncd.service is already active")
+    else:
+        raise RuntimeError("systemd-timesyncd.service is not active")
+
+    for attempt in range(attempts):
+        completed = run(
+            ["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+            check=False,
+            capture_output=True,
+        )
+        if completed.returncode == 0 and completed.stdout.strip().lower() == "yes":
+            logger.info("Verified the system clock is synchronized")
+            return
+        if attempt + 1 < attempts:
+            time.sleep(delay_seconds)
+
+    raise RuntimeError("System clock did not synchronize before apt operations")
 
 
 def _configure_identity(config: BootstrapConfig, logger: ClientLogger) -> None:

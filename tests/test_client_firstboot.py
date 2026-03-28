@@ -12,7 +12,7 @@ LIB_DIR = Path(__file__).resolve().parents[1] / "raspi_pxe_docker_fleet" / "root
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
-from ha_pxe.client.firstboot import ensure_kernel_dhcp_resolver, ensure_networkmanager_ready
+from ha_pxe.client.firstboot import ensure_kernel_dhcp_resolver, ensure_networkmanager_ready, wait_for_time_sync
 
 
 class _FakeLogger:
@@ -100,3 +100,53 @@ class EnsureNetworkManagerReadyTests(unittest.TestCase):
             ],
         )
         self.assertIsNone(result)
+
+
+class WaitForTimeSyncTests(unittest.TestCase):
+    def test_wait_for_time_sync_restarts_timesyncd_and_waits_for_ntp(self) -> None:
+        logger = _FakeLogger()
+        commands: list[list[str]] = []
+
+        responses = iter(
+            [
+                subprocess.CompletedProcess(["systemctl", "restart", "systemd-timesyncd.service"], 0, "", ""),
+                subprocess.CompletedProcess(["timedatectl", "show", "-p", "NTPSynchronized", "--value"], 0, "no\n", ""),
+                subprocess.CompletedProcess(["timedatectl", "show", "-p", "NTPSynchronized", "--value"], 0, "yes\n", ""),
+            ]
+        )
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            commands.append(command)
+            del kwargs
+            return next(responses)
+
+        with (
+            patch("ha_pxe.client.firstboot.run", side_effect=fake_run),
+            patch("ha_pxe.client.firstboot.time.sleep"),
+        ):
+            wait_for_time_sync(logger, attempts=2, delay_seconds=0)
+
+        self.assertEqual(
+            commands,
+            [
+                ["systemctl", "restart", "systemd-timesyncd.service"],
+                ["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+                ["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+            ],
+        )
+
+    def test_wait_for_time_sync_raises_when_clock_never_synchronizes(self) -> None:
+        logger = _FakeLogger()
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            del kwargs
+            if command[:2] == ["systemctl", "restart"]:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, 0, "no\n", "")
+
+        with (
+            patch("ha_pxe.client.firstboot.run", side_effect=fake_run),
+            patch("ha_pxe.client.firstboot.time.sleep"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "did not synchronize before apt operations"):
+                wait_for_time_sync(logger, attempts=2, delay_seconds=0)
