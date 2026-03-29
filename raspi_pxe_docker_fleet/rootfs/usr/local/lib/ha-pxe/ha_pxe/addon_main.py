@@ -8,6 +8,7 @@ import time
 from typing import Any
 
 from .addon_context import AddonContext
+from .client_commands import queue_reconcile_command
 from .container_specs import normalize_container_specs
 from .errors import HaPxeError, SpecError
 from .provision import provision_client
@@ -45,6 +46,7 @@ def main() -> int:
             if not isinstance(client, dict):
                 raise HaPxeError("Each client entry must be an object")
             provision_client(context, client, server_ip)
+            queue_reconcile_command(context.paths.client_commands_dir, str(client.get("serial", "")))
 
         start_nfs_server(context, server_ip)
         start_tftp_server(context, server_ip)

@@ -74,7 +74,18 @@ class StartClientLogTransportTests(unittest.TestCase):
             self.assertTrue(spawned_commands[0][0].endswith("client-log-server.py"))
             self.assertEqual(
                 spawned_commands[0][1:],
-                ["--host", "0.0.0.0", "--port", "8099", "--path", "/client-log"],
+                [
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    "8099",
+                    "--log-path",
+                    "/client-log",
+                    "--command-path",
+                    "/client-command",
+                    "--commands-dir",
+                    str(context.paths.client_commands_dir),
+                ],
             )
 
 

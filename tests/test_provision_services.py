@@ -4,13 +4,15 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 LIB_DIR = Path(__file__).resolve().parents[1] / "raspi_pxe_docker_fleet" / "rootfs" / "usr" / "local" / "lib" / "ha-pxe"
 if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
-from ha_pxe.provision import _disable_stock_firstboot_services, _prepare_networkmanager_rootfs
+from ha_pxe.addon_context import AddonContext, AddonPaths
+from ha_pxe.provision import _disable_stock_firstboot_services, _prepare_networkmanager_rootfs, _write_bootstrap_files
 
 
 class DisableStockFirstbootServicesTests(unittest.TestCase):
@@ -120,6 +122,34 @@ class PrepareNetworkManagerRootfsTests(unittest.TestCase):
             _prepare_networkmanager_rootfs(root_dir)
 
             self.assertEqual(resolv_path.read_text(encoding="utf-8"), "nameserver 192.168.25.1\n")
+
+
+class WriteBootstrapFilesTests(unittest.TestCase):
+    def test_write_bootstrap_files_enables_command_listener_and_writes_command_transport_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            root_dir = Path(temp_dir_name)
+            context = AddonContext(paths=AddonPaths(root=root_dir))
+            context._config_cache = {
+                "default_username": "pi",
+                "default_password": "secret",
+                "ssh_authorized_keys": "",
+                "default_timezone": "",
+                "default_keyboard_layout": "",
+                "default_locale": "",
+            }
+
+            with patch("ha_pxe.provision.capture", return_value="hashed-password"):
+                _write_bootstrap_files(context, root_dir, "cdc843d7", "janky", "192.0.2.10", "[]\n")
+
+            bootstrap_env = (root_dir / "etc" / "ha-pxe" / "bootstrap.env").read_text(encoding="utf-8")
+            self.assertIn("PXE_COMMAND_HOST=192.0.2.10\n", bootstrap_env)
+            self.assertIn("PXE_COMMAND_PORT=8099\n", bootstrap_env)
+            self.assertIn("PXE_COMMAND_PATH=/client-command\n", bootstrap_env)
+            self.assertTrue((root_dir / "usr" / "local" / "sbin" / "ha-pxe-command-listener").exists())
+            self.assertTrue((root_dir / "etc" / "systemd" / "system" / "ha-pxe-command-listener.service").exists())
+            enabled_service = root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants" / "ha-pxe-command-listener.service"
+            self.assertTrue(enabled_service.is_symlink())
+            self.assertEqual(enabled_service.readlink(), Path("../ha-pxe-command-listener.service"))
 
 
 if __name__ == "__main__":

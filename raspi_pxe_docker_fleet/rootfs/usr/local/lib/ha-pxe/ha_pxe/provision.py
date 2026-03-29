@@ -476,14 +476,24 @@ def _write_bootstrap_files(
     templates = context.paths.templates_dir
     copy_file(templates / "ha-pxe-firstboot.service", root_dir / "etc" / "systemd" / "system" / "ha-pxe-firstboot.service", 0o644)
     copy_file(templates / "ha-pxe-early-log.service", root_dir / "etc" / "systemd" / "system" / "ha-pxe-early-log.service", 0o644)
+    copy_file(
+        templates / "ha-pxe-command-listener.service",
+        root_dir / "etc" / "systemd" / "system" / "ha-pxe-command-listener.service",
+        0o644,
+    )
     copy_file(templates / "ha-pxe-container-sync.service", root_dir / "etc" / "systemd" / "system" / "ha-pxe-container-sync.service", 0o644)
     copy_file(templates / "ha-pxe-container-sync.timer", root_dir / "etc" / "systemd" / "system" / "ha-pxe-container-sync.timer", 0o644)
     copy_file(templates / "ha-pxe-early-log.py", root_dir / "usr" / "local" / "sbin" / "ha-pxe-early-log", 0o755)
     copy_file(templates / "ha-pxe-firstboot.py", root_dir / "usr" / "local" / "sbin" / "ha-pxe-firstboot", 0o755)
+    copy_file(templates / "ha-pxe-command-listener.py", root_dir / "usr" / "local" / "sbin" / "ha-pxe-command-listener", 0o755)
     copy_file(templates / "ha-pxe-container-sync.py", root_dir / "usr" / "local" / "sbin" / "ha-pxe-container-sync", 0o755)
     copy_tree(context.paths.package_dir, root_dir / "usr" / "local" / "lib" / "ha-pxe" / "ha_pxe")
 
     replace_symlink(root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants" / "ha-pxe-early-log.service", "../ha-pxe-early-log.service")
+    replace_symlink(
+        root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants" / "ha-pxe-command-listener.service",
+        "../ha-pxe-command-listener.service",
+    )
     replace_symlink(root_dir / "etc" / "systemd" / "system" / "timers.target.wants" / "ha-pxe-container-sync.timer", "../ha-pxe-container-sync.timer")
 
     bootstrap_values = {
@@ -498,6 +508,9 @@ def _write_bootstrap_files(
         "PXE_LOG_HOST": server_ip,
         "PXE_LOG_PORT": str(context.paths.client_log_port),
         "PXE_LOG_PATH": context.paths.client_log_path,
+        "PXE_COMMAND_HOST": server_ip,
+        "PXE_COMMAND_PORT": str(context.paths.client_log_port),
+        "PXE_COMMAND_PATH": context.paths.client_command_path,
     }
     atomic_write(root_dir / "etc" / "ha-pxe" / "bootstrap.env", format_env_file(bootstrap_values))
 

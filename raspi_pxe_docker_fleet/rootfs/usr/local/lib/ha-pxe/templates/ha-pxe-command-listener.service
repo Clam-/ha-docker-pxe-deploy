@@ -1,0 +1,17 @@
+[Unit]
+Description=Home Assistant PXE remote command listener
+Wants=network-online.target ha-pxe-firstboot.service
+After=network-online.target NetworkManager-wait-online.service ha-pxe-firstboot.service
+ConditionPathExists=/etc/ha-pxe/bootstrap.env
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/ha-pxe-command-listener
+Restart=always
+RestartSec=15
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

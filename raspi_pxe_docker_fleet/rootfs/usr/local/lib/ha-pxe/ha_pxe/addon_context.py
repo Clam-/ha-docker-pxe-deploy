@@ -24,6 +24,7 @@ class AddonPaths:
     os_page: str = "https://www.raspberrypi.com/software/operating-systems/"
     client_log_port: int = 8099
     client_log_path: str = "/client-log"
+    client_command_path: str = "/client-command"
 
     @property
     def options_file(self) -> Path:
@@ -60,6 +61,10 @@ class AddonPaths:
     @property
     def dhcp_hints_file(self) -> Path:
         return self.runtime_dir / "dhcp-example.txt"
+
+    @property
+    def client_commands_dir(self) -> Path:
+        return self.runtime_dir / "client-commands"
 
     @property
     def templates_dir(self) -> Path:

@@ -37,6 +37,7 @@ def ensure_directories(context: AddonContext) -> None:
     for path in (
         context.paths.cache_dir,
         context.paths.exports_dir,
+        context.paths.client_commands_dir,
         context.paths.runtime_dir,
         context.paths.state_dir,
         context.paths.tftp_dir,
@@ -187,7 +188,10 @@ def write_dhcp_hints(context: AddonContext, server_ip: str) -> None:
 def start_client_log_transport(context: AddonContext) -> None:
     port = str(context.paths.client_log_port)
     script_path = context.paths.library_dir / "client-log-server.py"
-    context.logger.debug(f"Starting client log transport listener on TCP {port}{context.paths.client_log_path}")
+    context.logger.debug(
+        "Starting client transport listener "
+        f"on TCP {port}{context.paths.client_log_path} and {context.paths.client_command_path}"
+    )
     process = spawn(
         [
             str(script_path),
@@ -195,15 +199,25 @@ def start_client_log_transport(context: AddonContext) -> None:
             "0.0.0.0",
             "--port",
             port,
-            "--path",
+            "--log-path",
             context.paths.client_log_path,
+            "--command-path",
+            context.paths.client_command_path,
+            "--commands-dir",
+            str(context.paths.client_commands_dir),
         ]
     )
     time.sleep(1)
     if process.poll() is not None:
-        raise HaPxeError(f"Client log transport failed to start on TCP {port}{context.paths.client_log_path}")
+        raise HaPxeError(
+            "Client transport failed to start "
+            f"on TCP {port}{context.paths.client_log_path} and {context.paths.client_command_path}"
+        )
     context.background_processes.append(process)
-    context.logger.info(f"Client log transport is active on TCP {port}{context.paths.client_log_path}")
+    context.logger.info(
+        "Client transport is active "
+        f"on TCP {port}{context.paths.client_log_path} and {context.paths.client_command_path}"
+    )
 
 
 def start_nfs_server(context: AddonContext, server_ip: str) -> None:

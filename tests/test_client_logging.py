@@ -63,6 +63,9 @@ class ClientLoggerTests(unittest.TestCase):
             log_host="",
             log_port=0,
             log_path="",
+            command_host="",
+            command_port=0,
+            command_path="",
         )
         logger = ClientLogger(config, prefix="ha-pxe-container-sync", source="container-sync")
         fake_stderr = io.StringIO()
@@ -91,6 +94,9 @@ class ClientLoggerTests(unittest.TestCase):
             log_host="addon.local",
             log_port=8099,
             log_path="/client-log",
+            command_host="addon.local",
+            command_port=8099,
+            command_path="/client-command",
         )
         logger = ClientLogger(config, prefix="ha-pxe-container-sync", source="container-sync")
 

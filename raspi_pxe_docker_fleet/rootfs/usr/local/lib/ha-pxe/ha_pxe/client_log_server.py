@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import argparse
 import http.server
+import json
 import re
 import sys
 from collections.abc import Mapping
+from pathlib import Path
+from urllib.parse import urlsplit
 
+from .client_commands import consume_client_commands
 from .log_format import format_log_line
 from .text import sanitize_message, sanitize_token
 
@@ -24,7 +28,7 @@ class ClientLogRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         expected_path = getattr(self.server, "log_path", "/client-log")
-        if self.path != expected_path:
+        if self._request_path() != expected_path:
             self.send_error(404)
             return
 
@@ -44,10 +48,44 @@ class ClientLogRequestHandler(http.server.BaseHTTPRequestHandler):
         self.close_connection = True
 
     def do_GET(self) -> None:  # noqa: N802
-        self.send_error(405)
+        expected_path = getattr(self.server, "command_path", "/client-command")
+        request_path = self._request_path()
+        if request_path != expected_path:
+            self.send_error(404)
+            return
+
+        raw_serial = sanitize_message(self.headers.get("X-Ha-Pxe-Serial", ""))
+        serial = raw_serial.lower().removeprefix("0x")
+        if not serial or any(char not in "0123456789abcdef" for char in serial):
+            self.send_error(400)
+            return
+
+        commands_dir = Path(getattr(self.server, "commands_dir", "."))
+        commands = consume_client_commands(commands_dir, serial)
+        if not commands:
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            return
+
+        body = json.dumps({"commands": commands}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+        self.close_connection = True
 
     def log_message(self, format: str, *args: object) -> None:
         return
+
+    def _request_path(self) -> str:
+        return urlsplit(self.path).path
 
     def _emit_log(self, body: bytes) -> None:
         entry = format_log_entry(self.headers, body)
@@ -285,9 +323,11 @@ def _host_prefix(hostname: str, serial: str, *, include_serial: bool = False) ->
     return f"{hostname}:"
 
 
-def serve(host: str, port: int, path: str) -> int:
+def serve(host: str, port: int, log_path: str, command_path: str, commands_dir: Path) -> int:
     with ClientLogServer((host, port), ClientLogRequestHandler) as server:
-        server.log_path = path
+        server.log_path = log_path
+        server.command_path = command_path
+        server.commands_dir = commands_dir
         server.serve_forever()
     return 0
 
@@ -296,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the ha-pxe client log transport server")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8099)
-    parser.add_argument("--path", default="/client-log")
+    parser.add_argument("--log-path", default="/client-log")
+    parser.add_argument("--command-path", default="/client-command")
+    parser.add_argument("--commands-dir", default=".")
     args = parser.parse_args(argv)
-    return serve(args.host, args.port, args.path)
+    return serve(args.host, args.port, args.log_path, args.command_path, Path(args.commands_dir))

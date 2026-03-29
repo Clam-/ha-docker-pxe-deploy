@@ -48,6 +48,9 @@ class BootstrapConfig:
     log_host: str
     log_port: int
     log_path: str
+    command_host: str
+    command_port: int
+    command_path: str
 
     @classmethod
     def load(cls, path: Path | None = None) -> "BootstrapConfig":
@@ -64,6 +67,9 @@ class BootstrapConfig:
             log_host=values.get("PXE_LOG_HOST", ""),
             log_port=int(values.get("PXE_LOG_PORT", "0") or "0"),
             log_path=values.get("PXE_LOG_PATH", "/client-log"),
+            command_host=values.get("PXE_COMMAND_HOST", values.get("PXE_LOG_HOST", "")),
+            command_port=int(values.get("PXE_COMMAND_PORT", values.get("PXE_LOG_PORT", "0")) or "0"),
+            command_path=values.get("PXE_COMMAND_PATH", "/client-command"),
         )
 
 
