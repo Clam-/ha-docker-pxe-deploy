@@ -13,6 +13,8 @@ if str(LIB_DIR) not in sys.path:
     sys.path.insert(0, str(LIB_DIR))
 
 from ha_pxe.client.firstboot import (
+    _configure_services,
+    _start_command_listener,
     ensure_kernel_dhcp_resolver,
     ensure_networkmanager_ready,
     repair_kernel_dhcp_resolver_if_needed,
@@ -231,3 +233,34 @@ class WaitForTimeSyncTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "did not synchronize before apt operations"):
                 wait_for_time_sync(logger, attempts=2, delay_seconds=0)
+
+
+class ConfigureServicesTests(unittest.TestCase):
+    def test_configure_services_enables_command_listener_but_starts_initial_container_sync_first(self) -> None:
+        logger = _FakeLogger()
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            commands.append(command)
+            del kwargs
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch("ha_pxe.client.firstboot.run", side_effect=fake_run):
+            _configure_services(logger)
+
+        self.assertIn(["systemctl", "enable", "ha-pxe-command-listener.service"], commands)
+        self.assertIn("info:Enabled ha-pxe-command-listener.service", logger.messages)
+        self.assertNotIn(["systemctl", "start", "ha-pxe-command-listener.service"], commands)
+        self.assertIn(["systemctl", "start", "ha-pxe-container-sync.service"], commands)
+
+    def test_start_command_listener_starts_remote_command_service(self) -> None:
+        logger = _FakeLogger()
+
+        with patch(
+            "ha_pxe.client.firstboot.run",
+            return_value=subprocess.CompletedProcess(["systemctl", "start", "ha-pxe-command-listener.service"], 0, "", ""),
+        ) as run_mock:
+            _start_command_listener(logger)
+
+        run_mock.assert_called_once_with(["systemctl", "start", "ha-pxe-command-listener.service"], check=False)
+        self.assertIn("info:Started ha-pxe-command-listener.service", logger.messages)

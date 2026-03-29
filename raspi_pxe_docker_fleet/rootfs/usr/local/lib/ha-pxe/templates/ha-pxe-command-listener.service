@@ -1,8 +1,9 @@
 [Unit]
 Description=Home Assistant PXE remote command listener
-Wants=network-online.target ha-pxe-firstboot.service
-After=network-online.target NetworkManager-wait-online.service ha-pxe-firstboot.service
+Wants=network-online.target
+After=network-online.target NetworkManager-wait-online.service
 ConditionPathExists=/etc/ha-pxe/bootstrap.env
+ConditionPathExists=/var/lib/ha-pxe/firstboot.done
 
 [Service]
 Type=simple

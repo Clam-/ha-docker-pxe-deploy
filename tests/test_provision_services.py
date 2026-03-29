@@ -146,7 +146,10 @@ class WriteBootstrapFilesTests(unittest.TestCase):
             self.assertIn("PXE_COMMAND_PORT=8099\n", bootstrap_env)
             self.assertIn("PXE_COMMAND_PATH=/client-command\n", bootstrap_env)
             self.assertTrue((root_dir / "usr" / "local" / "sbin" / "ha-pxe-command-listener").exists())
-            self.assertTrue((root_dir / "etc" / "systemd" / "system" / "ha-pxe-command-listener.service").exists())
+            command_listener_service = root_dir / "etc" / "systemd" / "system" / "ha-pxe-command-listener.service"
+            self.assertTrue(command_listener_service.exists())
+            command_listener_text = command_listener_service.read_text(encoding="utf-8")
+            self.assertIn("ConditionPathExists=/var/lib/ha-pxe/firstboot.done\n", command_listener_text)
             enabled_service = root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants" / "ha-pxe-command-listener.service"
             self.assertTrue(enabled_service.is_symlink())
             self.assertEqual(enabled_service.readlink(), Path("../ha-pxe-command-listener.service"))

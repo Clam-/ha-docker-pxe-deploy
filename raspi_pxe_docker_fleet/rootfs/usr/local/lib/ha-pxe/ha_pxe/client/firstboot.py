@@ -66,12 +66,14 @@ def main() -> int:
         clear_stock_ssh_banner(config, logger)
         logger.stage_complete("access", "User access configuration completed")
 
-        logger.stage_start("services", "Enabling and starting Docker, SSH, and container-sync services")
+        logger.stage_start("services", "Enabling Docker, SSH, command-listener, and container-sync services and running the initial reconciliation")
         _configure_services(logger)
         logger.stage_complete("services", "Runtime services are enabled and started")
 
-        logger.stage_start("finalize", "Recording first-boot completion marker")
+        logger.stage_start("finalize", "Recording first-boot completion marker and activating remote commands")
         paths.firstboot_marker.touch()
+        logger.info("Recorded first-boot completion marker")
+        _start_command_listener(logger)
         logger.stage_complete("finalize", "First-boot provisioning completed successfully")
         return 0
     except Exception as exc:  # noqa: BLE001
@@ -251,6 +253,10 @@ def _configure_services(logger: ClientLogger) -> None:
         logger.info("Enabled ssh.service")
     else:
         logger.warning("ssh.service could not be enabled; continuing")
+    if run(["systemctl", "enable", "ha-pxe-command-listener.service"], check=False).returncode == 0:
+        logger.info("Enabled ha-pxe-command-listener.service")
+    else:
+        logger.warning("ha-pxe-command-listener.service could not be enabled; continuing")
     run(["systemctl", "enable", "ha-pxe-container-sync.timer"])
     logger.info("Enabled ha-pxe-container-sync.timer")
 
@@ -270,3 +276,10 @@ def _configure_services(logger: ClientLogger) -> None:
         logger.warning("Initial ha-pxe-container-sync.service run failed to start; the recurring timer will retry")
     run(["systemctl", "start", "ha-pxe-container-sync.timer"])
     logger.info("Started ha-pxe-container-sync.timer")
+
+
+def _start_command_listener(logger: ClientLogger) -> None:
+    if run(["systemctl", "start", "ha-pxe-command-listener.service"], check=False).returncode == 0:
+        logger.info("Started ha-pxe-command-listener.service")
+    else:
+        logger.warning("ha-pxe-command-listener.service could not be started; remote commands will be unavailable")
