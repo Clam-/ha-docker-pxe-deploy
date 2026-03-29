@@ -74,7 +74,7 @@ NETWORKMANAGER_CONFLICTING_SERVICES = (
 NETWORKMANAGER_CONFIG = (
     "# Managed by HA-PXE\n"
     "[main]\n"
-    "dns=default\n\n"
+    "dns=none\n\n"
     "[ifupdown]\n"
     "managed=true\n"
 )
@@ -414,7 +414,7 @@ def _prepare_networkmanager_rootfs(root_dir: Path) -> None:
     ensure_directory(root_dir / "etc" / "systemd" / "system" / "network-online.target.wants")
 
     atomic_write(root_dir / "etc" / "NetworkManager" / "conf.d" / "90-ha-pxe.conf", NETWORKMANAGER_CONFIG, 0o644)
-    atomic_write(root_dir / "etc" / "resolv.conf", RESOLV_CONF_PLACEHOLDER, 0o644)
+    _prepare_resolv_conf_placeholder(root_dir)
     _enable_rootfs_service(root_dir, "NetworkManager.service")
     _enable_rootfs_service(root_dir, NETWORKMANAGER_WAIT_ONLINE_SERVICE, wanted_by="network-online.target.wants")
 
@@ -422,6 +422,14 @@ def _prepare_networkmanager_rootfs(root_dir: Path) -> None:
         replace_symlink(root_dir / "etc" / "systemd" / "system" / service, "/dev/null")
         (root_dir / "etc" / "systemd" / "system" / "multi-user.target.wants" / service).unlink(missing_ok=True)
         (root_dir / "etc" / "systemd" / "system" / "network-online.target.wants" / service).unlink(missing_ok=True)
+
+
+def _prepare_resolv_conf_placeholder(root_dir: Path) -> None:
+    resolv_path = root_dir / "etc" / "resolv.conf"
+    firstboot_marker = root_dir / "var" / "lib" / "ha-pxe" / "firstboot.done"
+    if firstboot_marker.exists():
+        return
+    atomic_write(resolv_path, RESOLV_CONF_PLACEHOLDER, 0o644)
 
 
 def _enable_rootfs_service(root_dir: Path, service: str, *, wanted_by: str = "multi-user.target.wants") -> None:

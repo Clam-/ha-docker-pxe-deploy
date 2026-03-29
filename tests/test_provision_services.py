@@ -76,7 +76,7 @@ class PrepareNetworkManagerRootfsTests(unittest.TestCase):
 
             self.assertEqual(
                 (root_dir / "etc" / "NetworkManager" / "conf.d" / "90-ha-pxe.conf").read_text(encoding="utf-8"),
-                "# Managed by HA-PXE\n[main]\ndns=default\n\n[ifupdown]\nmanaged=true\n",
+                "# Managed by HA-PXE\n[main]\ndns=none\n\n[ifupdown]\nmanaged=true\n",
             )
             self.assertFalse(resolv_path.is_symlink())
             self.assertEqual(
@@ -99,6 +99,27 @@ class PrepareNetworkManagerRootfsTests(unittest.TestCase):
                 self.assertEqual(service_path.readlink(), Path("/dev/null"))
                 self.assertFalse((multi_user_wants / service).exists())
                 self.assertFalse((network_online_wants / service).exists())
+
+    def test_prepare_networkmanager_rootfs_preserves_existing_resolv_conf_after_firstboot(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            root_dir = Path(temp_dir_name)
+            resolv_path = root_dir / "etc" / "resolv.conf"
+            resolv_path.parent.mkdir(parents=True)
+            resolv_path.write_text("nameserver 192.168.25.1\n", encoding="utf-8")
+
+            marker = root_dir / "var" / "lib" / "ha-pxe" / "firstboot.done"
+            marker.parent.mkdir(parents=True)
+            marker.write_text("", encoding="utf-8")
+
+            networkmanager_service = root_dir / "usr" / "lib" / "systemd" / "system" / "NetworkManager.service"
+            networkmanager_service.parent.mkdir(parents=True)
+            networkmanager_service.write_text("[Unit]\nDescription=NetworkManager\n", encoding="utf-8")
+            wait_online_service = root_dir / "usr" / "lib" / "systemd" / "system" / "NetworkManager-wait-online.service"
+            wait_online_service.write_text("[Unit]\nDescription=NetworkManager wait online\n", encoding="utf-8")
+
+            _prepare_networkmanager_rootfs(root_dir)
+
+            self.assertEqual(resolv_path.read_text(encoding="utf-8"), "nameserver 192.168.25.1\n")
 
 
 if __name__ == "__main__":

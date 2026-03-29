@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +36,27 @@ def read_resolv_search_domains(path: Path | None = None) -> list[str]:
             domain = _normalize_domain(parts[1])
             return [domain] if domain else []
     return []
+
+
+def read_resolv_nameservers(path: Path | None = None) -> list[str]:
+    resolv_path = path or Path("/etc/resolv.conf")
+    try:
+        lines = resolv_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    nameservers: list[str] = []
+    for raw_line in lines:
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) < 2 or parts[0] != "nameserver":
+            continue
+        nameserver = parts[1].strip()
+        if nameserver and nameserver not in nameservers:
+            nameservers.append(nameserver)
+    return nameservers
 
 
 def read_kernel_dhcp_resolver_config(path: Path | None = None) -> ResolverConfig:
@@ -71,6 +93,16 @@ def render_resolv_conf(config: ResolverConfig) -> str:
         lines.append("search " + " ".join(config.search_domains))
     lines.extend(f"nameserver {nameserver}" for nameserver in config.nameservers)
     return "\n".join(lines) + "\n"
+
+
+def is_loopback_nameserver(value: str) -> bool:
+    candidate = value.strip().strip("[]")
+    if "%" in candidate:
+        candidate = candidate.split("%", 1)[0]
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        return candidate.lower() == "localhost"
 
 
 def _normalize_domain(value: str) -> str:

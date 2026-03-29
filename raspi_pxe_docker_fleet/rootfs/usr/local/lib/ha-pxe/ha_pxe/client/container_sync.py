@@ -17,6 +17,7 @@ from .container_engine import (
     reconcile_container,
     spec_key,
 )
+from .firstboot import repair_kernel_dhcp_resolver_if_needed
 from .logging import ClientLogger
 
 
@@ -35,6 +36,8 @@ def main() -> int:
             logger.stage_skip("preflight", "Docker CLI is not installed on the client yet; skipping container reconciliation")
             return 0
         logger.stage_complete("preflight", "Docker CLI is available")
+
+        repair_kernel_dhcp_resolver_if_needed(logger)
 
         logger.stage_start("validate", "Validating the desired container specification file")
         specs = load_desired_specs(paths.containers_json)

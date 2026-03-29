@@ -7,7 +7,13 @@ import time
 from pathlib import Path
 
 from ..fs_utils import atomic_write
-from ..resolver import KERNEL_DHCP_PNP_PATH, read_kernel_dhcp_resolver_config, render_resolv_conf
+from ..resolver import (
+    KERNEL_DHCP_PNP_PATH,
+    is_loopback_nameserver,
+    read_kernel_dhcp_resolver_config,
+    read_resolv_nameservers,
+    render_resolv_conf,
+)
 from ..shell import run
 from .bootstrap import BootstrapConfig, ClientPaths, clear_stock_ssh_banner, configure_ssh_keys
 from .locale_setup import apply_locale_defaults
@@ -84,6 +90,31 @@ def ensure_kernel_dhcp_resolver(
     root: Path | None = None,
 ) -> str:
     client_root = root or Path("/")
+    _write_kernel_dhcp_resolver(client_root, logger)
+    return RESOLV_CONF_PATH
+
+
+def repair_kernel_dhcp_resolver_if_needed(
+    logger: ClientLogger,
+    root: Path | None = None,
+) -> bool:
+    client_root = root or Path("/")
+    resolv_path = client_root / RESOLV_CONF_PATH.lstrip("/")
+    nameservers = read_resolv_nameservers(resolv_path)
+
+    if nameservers and not all(is_loopback_nameserver(nameserver) for nameserver in nameservers):
+        return False
+
+    if nameservers:
+        logger.warning("/etc/resolv.conf only contains loopback nameserver entries; refreshing it from kernel DHCP boot data")
+    else:
+        logger.warning("/etc/resolv.conf does not contain any nameserver entries; refreshing it from kernel DHCP boot data")
+
+    _write_kernel_dhcp_resolver(client_root, logger)
+    return True
+
+
+def _write_kernel_dhcp_resolver(client_root: Path, logger: ClientLogger) -> None:
     pnp_path = client_root / KERNEL_DHCP_PNP_PATH.lstrip("/")
     resolver_config = read_kernel_dhcp_resolver_config(pnp_path)
     if not resolver_config.nameservers:
@@ -94,7 +125,6 @@ def ensure_kernel_dhcp_resolver(
     logger.info(
         f"/etc/resolv.conf updated from kernel DHCP boot data with {len(resolver_config.nameservers)} nameserver(s)"
     )
-    return RESOLV_CONF_PATH
 
 
 def wait_for_time_sync(
