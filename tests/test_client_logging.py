@@ -113,19 +113,20 @@ class ClientLoggerTests(unittest.TestCase):
 
 
 class ClientLogRequestHandlerTests(unittest.TestCase):
-    def test_format_log_entry_emits_transport_log(self) -> None:
+    def test_format_log_entry_compacts_container_sync_run_start(self) -> None:
         entry = format_log_entry(
             {
                 "X-Ha-Pxe-Source": "container-sync",
                 "X-Ha-Pxe-Level": "info",
-                "X-Ha-Pxe-Stage": "reconcile",
+                "X-Ha-Pxe-Stage": "preflight",
                 "X-Ha-Pxe-Status": "started",
                 "X-Ha-Pxe-Hostname": "janky",
                 "X-Ha-Pxe-Serial": "cdc843d7",
             },
-            b"hello",
+            b"Starting managed container reconciliation for janky (cdc843d7)",
         )
 
+        assert entry is not None
         self.assertRegex(
             entry,
             re.compile(
@@ -134,5 +135,52 @@ class ClientLogRequestHandlerTests(unittest.TestCase):
             ),
         )
         self.assertIn("[ha-pxe-client-transport]", entry)
-        self.assertIn("source=container-sync", entry)
-        self.assertIn("hello", entry)
+        self.assertIn("janky: Reconciliation run started", entry)
+
+    def test_format_log_entry_suppresses_low_signal_container_sync_noise(self) -> None:
+        entry = format_log_entry(
+            {
+                "X-Ha-Pxe-Source": "container-sync",
+                "X-Ha-Pxe-Level": "info",
+                "X-Ha-Pxe-Stage": "cleanup",
+                "X-Ha-Pxe-Status": "in_progress",
+                "X-Ha-Pxe-Hostname": "janky",
+                "X-Ha-Pxe-Serial": "cdc843d7",
+            },
+            b"Managed container inventory before cleanup: rgpiod[key=abc,state=running]",
+        )
+
+        self.assertIsNone(entry)
+
+    def test_format_log_entry_compacts_container_recreate_event(self) -> None:
+        entry = format_log_entry(
+            {
+                "X-Ha-Pxe-Source": "container-sync",
+                "X-Ha-Pxe-Level": "info",
+                "X-Ha-Pxe-Stage": "reconcile-rgpiod",
+                "X-Ha-Pxe-Status": "completed",
+                "X-Ha-Pxe-Hostname": "janky",
+                "X-Ha-Pxe-Serial": "cdc843d7",
+            },
+            b"Recreated container rgpiod with updated image or spec",
+        )
+
+        assert entry is not None
+        self.assertIn("janky: Recreated container rgpiod with updated image or spec", entry)
+
+    def test_format_log_entry_keeps_failure_details_concise(self) -> None:
+        entry = format_log_entry(
+            {
+                "X-Ha-Pxe-Source": "container-sync",
+                "X-Ha-Pxe-Level": "error",
+                "X-Ha-Pxe-Stage": "reconcile-rgpiod",
+                "X-Ha-Pxe-Status": "failed",
+                "X-Ha-Pxe-Hostname": "janky",
+                "X-Ha-Pxe-Serial": "cdc843d7",
+                "X-Ha-Pxe-Exit-Code": "1",
+            },
+            b"Failed to reconcile container rgpiod: boom",
+        )
+
+        assert entry is not None
+        self.assertIn("janky (cdc843d7): container sync failed: Failed to reconcile container rgpiod: boom (exit 1)", entry)

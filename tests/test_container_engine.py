@@ -15,6 +15,7 @@ if str(LIB_DIR) not in sys.path:
 from ha_pxe.client.container_engine import (
     MANAGED_DOCKER_NETWORK_NAME,
     container_name_for_spec,
+    ensure_desired_image,
     ensure_managed_network,
     generated_files_hash,
     host_resolver_search_domains,
@@ -172,6 +173,22 @@ class ContainerEngineTests(unittest.TestCase):
                 MANAGED_DOCKER_NETWORK_NAME,
             ],
         )
+
+    def test_ensure_desired_image_reports_pull_failure_without_name_error(self) -> None:
+        logger = _FakeLogger()
+        spec = self._base_spec()
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            if command[:2] == ["docker", "pull"]:
+                self.assertEqual(kwargs.get("check"), False)
+                self.assertEqual(kwargs.get("capture_output"), True)
+                return subprocess.CompletedProcess(command, 1, "", "manifest unknown")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("ha_pxe.client.container_engine.run", side_effect=fake_run):
+                with self.assertRaisesRegex(Exception, "Failed to pull docker.io/library/busybox:latest: manifest unknown"):
+                    ensure_desired_image(spec, "key123", Path(tmpdir), logger, "serial123")
 
     def test_materialize_files_preserves_unchanged_file_inode(self) -> None:
         logger = _FakeLogger()

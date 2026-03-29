@@ -17,7 +17,7 @@ from ..errors import HaPxeError, SpecError
 from ..fs_utils import atomic_write, ensure_directory
 from ..resolver import read_kernel_dhcp_resolver_config, read_resolv_search_domains
 from ..shell import run
-from ..text import slug, stable_json
+from ..text import sanitize_message, slug, stable_json
 from .logging import ClientLogger
 
 MANAGED_DOCKER_NETWORK_NAME = "ha-pxe-managed"
