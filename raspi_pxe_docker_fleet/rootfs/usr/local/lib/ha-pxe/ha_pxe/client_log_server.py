@@ -8,17 +8,26 @@ import json
 import re
 import sys
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from .client_commands import consume_client_commands
 from .log_format import format_log_line
+from .log_levels import normalize_log_level, should_log_level
 from .text import sanitize_message, sanitize_token
 
 
 class ClientLogServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+
+@dataclass(frozen=True)
+class TransportLogRecord:
+    level: str
+    message: str
+    name: str = "ha-pxe-client-transport"
 
 
 class ClientLogRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -88,12 +97,28 @@ class ClientLogRequestHandler(http.server.BaseHTTPRequestHandler):
         return urlsplit(self.path).path
 
     def _emit_log(self, body: bytes) -> None:
-        entry = format_log_entry(self.headers, body)
+        entry = format_filtered_log_entry(self.headers, body, getattr(self.server, "log_level", "info"))
         if entry:
             print(entry, file=sys.stderr, flush=True)
 
 
 def format_log_entry(headers: Mapping[str, str], body: bytes) -> str | None:
+    record = build_log_record(headers, body)
+    if record is None:
+        return None
+    return format_log_line(record.level, record.message, name=record.name)
+
+
+def format_filtered_log_entry(headers: Mapping[str, str], body: bytes, configured_level: str) -> str | None:
+    record = build_log_record(headers, body)
+    if record is None:
+        return None
+    if not should_log_level(record.level, normalize_log_level(configured_level)):
+        return None
+    return format_log_line(record.level, record.message, name=record.name)
+
+
+def build_log_record(headers: Mapping[str, str], body: bytes) -> TransportLogRecord | None:
     message = sanitize_message(body.decode("utf-8", errors="replace")) or "No message provided"
     source = sanitize_token(headers.get("X-Ha-Pxe-Source"), "client")
     level = sanitize_token(headers.get("X-Ha-Pxe-Level"), "info")
@@ -105,11 +130,7 @@ def format_log_entry(headers: Mapping[str, str], body: bytes) -> str | None:
     summary = summarize_log_entry(source, hostname, serial, level, stage, status, message, exit_code)
     if summary is None:
         return None
-    return format_log_line(
-        level,
-        summary,
-        name="ha-pxe-client-transport",
-    )
+    return TransportLogRecord(level=normalize_log_level(level), message=summary)
 
 
 def summarize_log_entry(
@@ -323,11 +344,12 @@ def _host_prefix(hostname: str, serial: str, *, include_serial: bool = False) ->
     return f"{hostname}:"
 
 
-def serve(host: str, port: int, log_path: str, command_path: str, commands_dir: Path) -> int:
+def serve(host: str, port: int, log_path: str, command_path: str, commands_dir: Path, log_level: str = "info") -> int:
     with ClientLogServer((host, port), ClientLogRequestHandler) as server:
         server.log_path = log_path
         server.command_path = command_path
         server.commands_dir = commands_dir
+        server.log_level = normalize_log_level(log_level)
         server.serve_forever()
     return 0
 
@@ -339,5 +361,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log-path", default="/client-log")
     parser.add_argument("--command-path", default="/client-command")
     parser.add_argument("--commands-dir", default=".")
+    parser.add_argument("--log-level", default="info")
     args = parser.parse_args(argv)
-    return serve(args.host, args.port, args.log_path, args.command_path, Path(args.commands_dir))
+    return serve(args.host, args.port, args.log_path, args.command_path, Path(args.commands_dir), args.log_level)

@@ -40,6 +40,7 @@ clients:
   - serial: "cdc843d7"
     model: pi3
     hostname: janky
+    log_level: info
     image_arch: arm64
     rebuild: false
     containers: |
@@ -157,6 +158,7 @@ Client fields:
 - `serial`: Raspberry Pi serial number. Hex strings with or without a `0x` prefix are accepted.
 - `model`: One of `pi0`, `pi1`, `pi2`, `pi3`, `pi4`, `pi5`, `400`, `500`, `cm3`, `cm4`, `cm5`, or `zero2w`.
 - `hostname`: Hostname written into the client root filesystem.
+- `log_level`: Optional client-side threshold for first-boot, command-listener, and container-sync logs on that Raspberry Pi. Defaults to `info`. Relayed logs still include their level, so the add-on `log_level` independently decides which transported client entries appear in the add-on log.
 - `image_arch`: `auto`, `armhf`, or `arm64`.
 - `rebuild`: If `true`, the client boot and root exports are recreated from a fresh Raspberry Pi OS Lite image on the next start.
 - `enable_i2c`: Optional per-client override for the global `enable_i2c` setting.

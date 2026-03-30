@@ -85,6 +85,8 @@ class StartClientLogTransportTests(unittest.TestCase):
                     "/client-command",
                     "--commands-dir",
                     str(context.paths.client_commands_dir),
+                    "--log-level",
+                    "info",
                 ],
             )
 

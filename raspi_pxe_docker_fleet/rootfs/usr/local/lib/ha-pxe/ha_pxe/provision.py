@@ -12,6 +12,7 @@ from .envfile import format_env_file
 from .errors import HaPxeError
 from .fs_utils import atomic_write, copy_file, copy_tree, ensure_directory, replace_symlink
 from .image_ops import download_image, latest_image_url, populate_from_image
+from .log_levels import normalize_log_level
 from .runtime import (
     append_exports,
     bind_tftp_tree,
@@ -165,7 +166,7 @@ def provision_client(context: AddonContext, client: dict[str, object], server_ip
 
     _log_stage(context, "info", serial, "bootstrap", "started", "Installing first-boot and container-sync bootstrap assets")
     _disable_stock_firstboot_services(root_dir)
-    _write_bootstrap_files(context, root_dir, serial, hostname, server_ip, specs_to_json(containers))
+    _write_bootstrap_files(context, root_dir, client, serial, hostname, server_ip, specs_to_json(containers))
     _log_stage(context, "info", serial, "bootstrap", "completed", "Bootstrap scripts, services, and transport settings installed")
 
     _log_stage(context, "info", serial, "nfs", "started", "Registering per-client NFS exports")
@@ -453,6 +454,7 @@ def _enable_rootfs_service(root_dir: Path, service: str, *, wanted_by: str = "mu
 def _write_bootstrap_files(
     context: AddonContext,
     root_dir: Path,
+    client: dict[str, object],
     serial: str,
     hostname: str,
     server_ip: str,
@@ -464,6 +466,7 @@ def _write_bootstrap_files(
     timezone = str(context.config.get("default_timezone", "") or "")
     keyboard_layout = str(context.config.get("default_keyboard_layout", "") or "")
     locale = str(context.config.get("default_locale", "") or "")
+    client_log_level = normalize_log_level(str(client.get("log_level", "info") or "info"))
     password_hash = capture(["openssl", "passwd", "-6", password]) if password else ""
 
     ensure_directory(root_dir / "etc" / "ha-pxe")
@@ -505,6 +508,7 @@ def _write_bootstrap_files(
         "PXE_DEFAULT_TIMEZONE": timezone,
         "PXE_DEFAULT_KEYBOARD_LAYOUT": keyboard_layout,
         "PXE_DEFAULT_LOCALE": locale,
+        "PXE_LOG_LEVEL": client_log_level,
         "PXE_LOG_HOST": server_ip,
         "PXE_LOG_PORT": str(context.paths.client_log_port),
         "PXE_LOG_PATH": context.paths.client_log_path,

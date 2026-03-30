@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..envfile import parse_env_file
 from ..fs_utils import copy_file, ensure_directory
+from ..log_levels import normalize_log_level
 from ..shell import command_exists, run
 
 
@@ -45,6 +46,7 @@ class BootstrapConfig:
     default_timezone: str
     default_keyboard_layout: str
     default_locale: str
+    log_level: str
     log_host: str
     log_port: int
     log_path: str
@@ -64,6 +66,7 @@ class BootstrapConfig:
             default_timezone=values.get("PXE_DEFAULT_TIMEZONE", ""),
             default_keyboard_layout=values.get("PXE_DEFAULT_KEYBOARD_LAYOUT", ""),
             default_locale=values.get("PXE_DEFAULT_LOCALE", ""),
+            log_level=normalize_log_level(values.get("PXE_LOG_LEVEL", "info")),
             log_host=values.get("PXE_LOG_HOST", ""),
             log_port=int(values.get("PXE_LOG_PORT", "0") or "0"),
             log_path=values.get("PXE_LOG_PATH", "/client-log"),

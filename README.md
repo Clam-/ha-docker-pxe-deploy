@@ -128,5 +128,9 @@ definition with:
 - Provisioned clients automatically post first-boot and container-sync log
   entries back to the add-on over TCP `8099` at `/client-log`. If you filter
   traffic between the clients and the Home Assistant host, allow that path.
+- Each client can optionally set its own `log_level` in `clients[]`. That
+  threshold controls what the client emits locally and forwards upstream,
+  while the add-on `log_level` separately filters which transported client log
+  entries appear in the add-on log.
 
 See [`raspi_pxe_docker_fleet/DOCS.md`](./raspi_pxe_docker_fleet/DOCS.md) for configuration examples and operational details.

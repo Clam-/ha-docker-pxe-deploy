@@ -12,9 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from .log_format import format_log_line
+from .log_levels import normalize_log_level, should_log_level
 
-
-LOG_LEVELS = {"error": 0, "warn": 1, "info": 2, "debug": 3}
 
 
 @dataclass
@@ -77,36 +76,35 @@ class AddonPaths:
 
 class AddonLogger:
     def __init__(self, level: str = "info") -> None:
-        self.level = level if level in LOG_LEVELS else "info"
+        self.level = normalize_log_level(level)
 
     def configure(self, level: str) -> None:
-        if level in LOG_LEVELS:
-            self.level = level
-        else:
+        normalized_level = normalize_log_level(level)
+        if normalized_level != level:
             self.level = "info"
             self.warning(f"Unsupported log_level '{level}', defaulting to info")
+            return
+        self.level = normalized_level
 
     def should_log(self, level: str) -> bool:
-        requested = LOG_LEVELS.get(level, LOG_LEVELS["info"])
-        configured = LOG_LEVELS.get(self.level, LOG_LEVELS["info"])
-        return requested <= configured
+        return should_log_level(level, self.level)
 
-    def _emit(self, level: str, message: str) -> None:
+    def log(self, level: str, message: str, *, name: str = "") -> None:
         if not self.should_log(level):
             return
-        print(format_log_line(level, message), file=sys.stderr, flush=True)
+        print(format_log_line(level, message, name=name), file=sys.stderr, flush=True)
 
     def info(self, message: str) -> None:
-        self._emit("info", message)
+        self.log("info", message)
 
     def warning(self, message: str) -> None:
-        self._emit("warn", message)
+        self.log("warn", message)
 
     def error(self, message: str) -> None:
-        self._emit("error", message)
+        self.log("error", message)
 
     def debug(self, message: str) -> None:
-        self._emit("debug", message)
+        self.log("debug", message)
 
 
 @dataclass

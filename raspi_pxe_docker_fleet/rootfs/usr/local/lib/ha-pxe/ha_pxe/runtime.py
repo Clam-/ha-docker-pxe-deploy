@@ -205,6 +205,8 @@ def start_client_log_transport(context: AddonContext) -> None:
             context.paths.client_command_path,
             "--commands-dir",
             str(context.paths.client_commands_dir),
+            "--log-level",
+            context.logger.level,
         ]
     )
     time.sleep(1)

@@ -8,6 +8,7 @@ import traceback
 from dataclasses import dataclass
 
 from ..log_format import format_log_line
+from ..log_levels import should_log_level
 from ..text import sanitize_message, sanitize_token
 from .bootstrap import BootstrapConfig
 
@@ -19,6 +20,9 @@ class ClientLogger:
     source: str
     current_stage: str = "startup"
     remote_failure_reported: bool = False
+
+    def should_log(self, level: str) -> bool:
+        return should_log_level(level, self.config.log_level)
 
     def emit_local(self, level: str, stage: str, status: str, message: str) -> None:
         clean = sanitize_message(message)
@@ -61,7 +65,7 @@ class ClientLogger:
             if connection is not None:
                 connection.close()
 
-        if not self.remote_failure_reported:
+        if not self.remote_failure_reported and self.should_log("warn"):
             print(
                 format_log_line(
                     "warn",
@@ -74,7 +78,7 @@ class ClientLogger:
                 file=sys.stderr,
                 flush=True,
             )
-            self.remote_failure_reported = True
+        self.remote_failure_reported = True
         return False
 
     def log(self, level: str, stage: str, status: str, message: str, exit_code: str = "") -> None:
@@ -83,6 +87,8 @@ class ClientLogger:
         clean_status = sanitize_token(status, "message")
         clean_message = sanitize_message(message) or "No details provided"
         self.current_stage = clean_stage
+        if not self.should_log(clean_level):
+            return
         self.emit_local(clean_level, clean_stage, clean_status, clean_message)
         self.emit_remote(clean_level, clean_stage, clean_status, clean_message, exit_code)
 

@@ -139,9 +139,18 @@ class WriteBootstrapFilesTests(unittest.TestCase):
             }
 
             with patch("ha_pxe.provision.capture", return_value="hashed-password"):
-                _write_bootstrap_files(context, root_dir, "cdc843d7", "janky", "192.0.2.10", "[]\n")
+                _write_bootstrap_files(
+                    context,
+                    root_dir,
+                    {"log_level": "warn"},
+                    "cdc843d7",
+                    "janky",
+                    "192.0.2.10",
+                    "[]\n",
+                )
 
             bootstrap_env = (root_dir / "etc" / "ha-pxe" / "bootstrap.env").read_text(encoding="utf-8")
+            self.assertIn("PXE_LOG_LEVEL=warn\n", bootstrap_env)
             self.assertIn("PXE_COMMAND_HOST=192.0.2.10\n", bootstrap_env)
             self.assertIn("PXE_COMMAND_PORT=8099\n", bootstrap_env)
             self.assertIn("PXE_COMMAND_PATH=/client-command\n", bootstrap_env)

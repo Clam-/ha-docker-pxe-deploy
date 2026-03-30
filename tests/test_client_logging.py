@@ -14,7 +14,7 @@ if str(LIB_DIR) not in sys.path:
 
 from ha_pxe.client.bootstrap import BootstrapConfig
 from ha_pxe.client.logging import ClientLogger
-from ha_pxe.client_log_server import format_log_entry
+from ha_pxe.client_log_server import format_filtered_log_entry, format_log_entry
 
 
 class _FakeResponse:
@@ -60,6 +60,7 @@ class ClientLoggerTests(unittest.TestCase):
             default_timezone="",
             default_keyboard_layout="",
             default_locale="",
+            log_level="info",
             log_host="",
             log_port=0,
             log_path="",
@@ -91,6 +92,7 @@ class ClientLoggerTests(unittest.TestCase):
             default_timezone="",
             default_keyboard_layout="",
             default_locale="",
+            log_level="info",
             log_host="addon.local",
             log_port=8099,
             log_path="/client-log",
@@ -116,6 +118,37 @@ class ClientLoggerTests(unittest.TestCase):
         self.assertEqual(headers["X-Ha-Pxe-Exit-Code"], "7")
         self.assertTrue(instance.response.read_called)
         self.assertTrue(instance.closed)
+
+    def test_log_suppresses_local_and_remote_messages_below_client_threshold(self) -> None:
+        config = BootstrapConfig(
+            username="pi",
+            password_hash="",
+            hostname="janky",
+            serial="cdc843d7",
+            extra_groups="",
+            default_timezone="",
+            default_keyboard_layout="",
+            default_locale="",
+            log_level="warn",
+            log_host="addon.local",
+            log_port=8099,
+            log_path="/client-log",
+            command_host="addon.local",
+            command_port=8099,
+            command_path="/client-command",
+        )
+        logger = ClientLogger(config, prefix="ha-pxe-container-sync", source="container-sync")
+        fake_stderr = io.StringIO()
+        _FakeConnection.last_instance = None
+
+        with (
+            patch("ha_pxe.client.logging.sys.stderr", fake_stderr),
+            patch("ha_pxe.client.logging.http.client.HTTPConnection", _FakeConnection),
+        ):
+            logger.info("hello")
+
+        self.assertEqual(fake_stderr.getvalue(), "")
+        self.assertIsNone(_FakeConnection.last_instance)
 
 
 class ClientLogRequestHandlerTests(unittest.TestCase):
@@ -190,3 +223,19 @@ class ClientLogRequestHandlerTests(unittest.TestCase):
 
         assert entry is not None
         self.assertIn("janky (cdc843d7): container sync failed: Failed to reconcile container rgpiod: boom (exit 1)", entry)
+
+    def test_format_filtered_log_entry_respects_addon_threshold(self) -> None:
+        entry = format_filtered_log_entry(
+            {
+                "X-Ha-Pxe-Source": "container-sync",
+                "X-Ha-Pxe-Level": "info",
+                "X-Ha-Pxe-Stage": "preflight",
+                "X-Ha-Pxe-Status": "started",
+                "X-Ha-Pxe-Hostname": "janky",
+                "X-Ha-Pxe-Serial": "cdc843d7",
+            },
+            b"Starting managed container reconciliation for janky (cdc843d7)",
+            "warn",
+        )
+
+        self.assertIsNone(entry)
