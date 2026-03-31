@@ -74,8 +74,9 @@ def host_resolver_search_domains(path: Path | None = None) -> list[str]:
     return read_kernel_dhcp_resolver_config().search_domains
 
 
-def spec_hash(spec: dict[str, Any]) -> str:
+def spec_hash(spec: dict[str, Any], default_timezone: str = "") -> str:
     runtime_spec = dict(spec)
+    runtime_spec["env"] = container_runtime_env(spec, default_timezone)
     runtime_spec["files"] = _generated_file_mount_topology(spec)
     return hashlib.sha256(stable_json(runtime_spec).encode("utf-8")).hexdigest()
 
@@ -94,11 +95,20 @@ def generated_files_hash(spec: dict[str, Any]) -> str:
     return hashlib.sha256(stable_json(rendered_files).encode("utf-8")).hexdigest()
 
 
+def container_runtime_env(spec: dict[str, Any], default_timezone: str = "") -> dict[str, str]:
+    env = {str(key): str(value) for key, value in spec.get("env", {}).items()}
+    timezone = str(default_timezone or "").strip()
+    if timezone:
+        env["TZ"] = timezone
+    return env
+
+
 def reconcile_container(
     spec: dict[str, Any],
     state_root: Path,
     logger: ClientLogger,
     serial: str,
+    default_timezone: str = "",
 ) -> None:
     key = spec_key(spec)
     container_name = container_name_for_spec(spec)
@@ -111,7 +121,7 @@ def reconcile_container(
         ensure_directory(state_dir)
         logger.info(f"State directory for {display_name} is {state_dir}")
 
-        desired_spec_hash = spec_hash(spec)
+        desired_spec_hash = spec_hash(spec, default_timezone)
         desired_files_hash = generated_files_hash(spec)
         current_spec_hash = _docker_inspect(container_name, "{{ index .Config.Labels \"io.ha_pxe.spec_hash\" }}")
         current_image_id = _docker_inspect(container_name, "{{.Image}}")
@@ -122,7 +132,7 @@ def reconcile_container(
             logger.info(f"Container {container_name} does not exist yet; creating it")
             desired_image_id = ensure_desired_image(spec, key, state_dir, logger, serial)
             file_mounts = materialize_files(spec, state_dir, logger)
-            run_container(spec, key, container_name, desired_spec_hash, file_mounts, logger, serial)
+            run_container(spec, key, container_name, desired_spec_hash, file_mounts, logger, serial, default_timezone)
             write_applied_files_hash(state_dir, desired_files_hash)
             logger.stage_complete(stage_name, f"Created container {display_name}")
             return
@@ -148,7 +158,7 @@ def reconcile_container(
             logger.info(f"Recreating {container_name}")
             run(["docker", "rm", "-f", container_name])
             file_mounts = materialize_files(spec, state_dir, logger)
-            run_container(spec, key, container_name, desired_spec_hash, file_mounts, logger, serial)
+            run_container(spec, key, container_name, desired_spec_hash, file_mounts, logger, serial, default_timezone)
             write_applied_files_hash(state_dir, desired_files_hash)
             logger.stage_complete(stage_name, f"Recreated container {display_name} with updated image or spec")
             return
@@ -503,6 +513,7 @@ def run_container(
     file_mounts: list[str],
     logger: ClientLogger,
     serial: str,
+    default_timezone: str = "",
 ) -> None:
     command = [
         "docker",
@@ -529,7 +540,7 @@ def run_container(
         command.extend(["--network", MANAGED_DOCKER_NETWORK_NAME, "--network-alias", str(spec["name"])])
     if spec.get("workdir"):
         command.extend(["--workdir", str(spec["workdir"])])
-    for env_key, env_value in spec.get("env", {}).items():
+    for env_key, env_value in container_runtime_env(spec, default_timezone).items():
         command.extend(["-e", f"{env_key}={env_value}"])
     for label_key, label_value in spec.get("labels", {}).items():
         command.extend(["--label", f"{label_key}={label_value}"])

@@ -14,6 +14,7 @@ if str(LIB_DIR) not in sys.path:
 
 from ha_pxe.client.container_engine import (
     MANAGED_DOCKER_NETWORK_NAME,
+    container_runtime_env,
     container_name_for_spec,
     ensure_desired_image,
     ensure_managed_network,
@@ -118,6 +119,46 @@ class ContainerEngineTests(unittest.TestCase):
         )
         self.assertIn("home.nyanya.org", commands[0])
         self.assertIn("corp.example", commands[0])
+
+    def test_container_runtime_env_injects_default_timezone(self) -> None:
+        spec = self._base_spec()
+
+        self.assertEqual(
+            container_runtime_env(spec, "Australia/Melbourne"),
+            {"TZ": "Australia/Melbourne"},
+        )
+
+    def test_container_runtime_env_overrides_spec_timezone(self) -> None:
+        spec = self._base_spec()
+        spec["env"] = {"TZ": "UTC", "APP_MODE": "prod"}
+
+        self.assertEqual(
+            container_runtime_env(spec, "Australia/Melbourne"),
+            {"TZ": "Australia/Melbourne", "APP_MODE": "prod"},
+        )
+
+    def test_spec_hash_changes_when_default_timezone_changes(self) -> None:
+        spec = self._base_spec()
+
+        self.assertNotEqual(
+            spec_hash(spec),
+            spec_hash(spec, "Australia/Melbourne"),
+        )
+
+    def test_run_container_injects_default_timezone_env(self) -> None:
+        logger = _FakeLogger()
+        commands: list[list[str]] = []
+        spec = self._base_spec()
+
+        def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with patch("ha_pxe.client.container_engine.run", side_effect=fake_run):
+            run_container(spec, "key123", "rgpiod", "digest123", [], logger, "serial123", "Australia/Melbourne")
+
+        self.assertIn("-e", commands[0])
+        self.assertIn("TZ=Australia/Melbourne", commands[0])
 
     def test_host_resolver_search_domains_parses_search_and_domain_lines(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

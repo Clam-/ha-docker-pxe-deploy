@@ -64,7 +64,7 @@ def main() -> int:
         had_error = False
         for spec in specs:
             try:
-                reconcile_container(spec, paths.state_root, logger, config.serial)
+                reconcile_container(spec, paths.state_root, logger, config.serial, config.default_timezone)
             except Exception as exc:  # noqa: BLE001
                 logger.error(f"Failed to reconcile {spec['name']}: {exc}")
                 had_error = True
